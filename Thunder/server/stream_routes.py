@@ -209,11 +209,12 @@ async def media_delivery(request: web.Request):
         message_id, secure_hash = parse_media_request(path, request.query)
 
         client_id, streamer = select_optimal_client()
-        file_info = await streamer.get_file_info(message_id)
-
-        # Se o bot secundário falhar ou não encontrar o arquivo, tenta com o bot principal (Fallback)
-        if client_id != 0 and (not file_info.get('unique_id') or 'error' in file_info):
-            logger.warning(f"Bot secundário {client_id} falhou para o arquivo {message_id}, usando bot principal.")
+        
+        try:
+            # Busca informação com timeout curto para não travar o player no "Loading..."
+            file_info = await asyncio.wait_for(streamer.get_file_info(message_id), timeout=4.0)
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.warning(f"Bot {client_id} demorou ou falhou. Usando bot principal como fallback.")
             client_id = 0
             streamer = get_streamer(0)
             file_info = await streamer.get_file_info(message_id)
