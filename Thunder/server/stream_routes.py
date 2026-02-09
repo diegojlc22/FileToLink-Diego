@@ -20,7 +20,7 @@ routes = web.RouteTableDef()
 
 SECURE_HASH_LENGTH = 6
 CHUNK_SIZE = 1024 * 1024
-MAX_CONCURRENT_PER_CLIENT = 8
+MAX_CONCURRENT_PER_CLIENT = 20
 RANGE_REGEX = re.compile(r"bytes=(?P<start>\d*)-(?P<end>\d*)")
 PATTERN_HASH_FIRST = re.compile(
     rf"^([a-zA-Z0-9_-]{{{SECURE_HASH_LENGTH}}})(\d+)(?:/.*)?$")
@@ -221,12 +221,19 @@ async def media_delivery(request: web.Request):
         if not file_info.get('unique_id'):
             raise FileNotFound("ID único do arquivo não encontrado.")
 
-        # ESTABILIDADE TOTAL: Forçamos o uso do Bot Principal (0) para o Streaming.
-        # Os bots Multi-Token continuam ativos para responder comandos e dividir a carga do bot,
-        # mas o streaming de vídeo fica centralizado no bot principal para evitar quedas.
-        client_id = 0
-        streamer = get_streamer(0)
-        
+        # Tenta distribuir a carga entre todos os bots para o streaming real (GET)
+        # Se um bot secundário falhar, o sistema volta para o principal (0) automaticamente.
+        if request.method == 'GET' and request.method != 'HEAD':
+            client_id, streamer = select_optimal_client()
+        else:
+            client_id = 0
+            streamer = main_streamer
+
+        # Se por algum motivo o seletor falhar ou retornar erro, voltamos para o seguro (0)
+        if not streamer:
+            client_id = 0
+            streamer = main_streamer
+
         work_loads[client_id] += 1
 
         try:
