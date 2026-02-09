@@ -21,20 +21,14 @@ class ByteStreamer:
         self.chat_id = int(Var.BIN_CHANNEL)
 
     async def get_message(self, message_id: int) -> Message:
-        while True:
-            try:
-                message = await self.client.get_messages(self.chat_id, message_id)
-                break
-            except FloodWait as e:
-                logger.debug(f"FloodWait: get_message, sleep {e.value}s")
-                await asyncio.sleep(e.value)
-            except Exception as e:
-                logger.debug(f"Error fetching message {message_id}: {e}", exc_info=True)
-                raise FileNotFound(f"Message {message_id} not found") from e
-
-        if not message or not message.media:
+        try:
+            return await self.client.get_messages(self.chat_id, message_id)
+        except FloodWait as e:
+            # Não dormimos aqui, deixamos a rota tratar e trocar de bot
+            raise e
+        except Exception as e:
+            logger.debug(f"Error fetching message {message_id}: {e}")
             raise FileNotFound(f"Message {message_id} not found")
-        return message
 
     async def stream_file(
         self, message_id: int, offset: int = 0, limit: int = 0
@@ -47,16 +41,13 @@ class ByteStreamer:
         if limit > 0:
             chunk_limit = ((limit + (1024 * 1024) - 1) // (1024 * 1024)) + 1
 
-        while True:
-            try:
-                async for chunk in self.client.stream_media(
-                    message, offset=chunk_offset, limit=chunk_limit
-                ):
-                    yield chunk
-                break
-            except FloodWait as e:
-                logger.debug(f"FloodWait: stream_file, sleep {e.value}s")
-                await asyncio.sleep(e.value)
+        try:
+            async for chunk in self.client.stream_media(
+                message, offset=chunk_offset, limit=chunk_limit
+            ):
+                yield chunk
+        except FloodWait as e:
+            raise e
 
     def get_file_info_sync(self, message: Message) -> Dict[str, Any]:
         media = get_media(message)

@@ -9,6 +9,7 @@ from urllib.parse import quote, unquote
 from aiohttp import web
 
 from Thunder import __version__, StartTime
+from pyrogram.errors import FloodWait
 from Thunder.bot import StreamBot, multi_clients, work_loads
 from Thunder.server.exceptions import FileNotFound, InvalidHash
 from Thunder.utils.custom_dl import ByteStreamer
@@ -82,33 +83,32 @@ def parse_media_request(path: str, query: dict) -> tuple[int, str]:
 
 def select_optimal_client() -> tuple[int, ByteStreamer]:
     if not work_loads:
-        raise web.HTTPInternalServerError(text="No available clients.")
+        raise web.HTTPInternalServerError(text="No clients.")
 
     current_time = time.time()
     
-    # REGRA DE ESTABILIDADE: Sempre tenta o Bot 0 primeiro.
-    # Ele é o único que garantidamente tem os IDs corretos.
-    if 0 in work_loads and 0 not in BLACKLISTED_CLIENTS:
-        return 0, get_streamer(0)
-    
-    # Se o Bot 0 estiver banido (FloodWait), tenta os secundários
-    available_clients = []
-    for cid, load in work_loads.items():
-        if cid == 0: continue
+    # Lista de todos os bots que não estão banidos
+    available_indices = []
+    for cid in sorted(work_loads.keys()):
         if cid in BLACKLISTED_CLIENTS:
             if current_time < BLACKLISTED_CLIENTS[cid]:
                 continue
             else:
                 del BLACKLISTED_CLIENTS[cid]
-        available_clients.append((cid, load))
+        available_indices.append(cid)
 
-    if available_clients:
-        # Usa o bot secundário com menos carga
-        client_id = min(available_clients, key=lambda x: x[1])[0]
-        return client_id, get_streamer(client_id)
+    if not available_indices:
+        # Se TUDO estiver banido, tenta o Bot 0 como última esperança
+        logger.warning("ALERTA: Todos os bots estão banidos! Tentando Bot 0.")
+        return 0, get_streamer(0)
 
-    # Fallback final: Se tudo falhar, tenta o Bot 0 de novo (ele é o mais resiliente)
-    return 0, get_streamer(0)
+    # Sempre prefere o Bot 0 se ele estiver disponível
+    if 0 in available_indices:
+        return 0, get_streamer(0)
+
+    # Se Bot 0 está banido, usa o secundário com menos carga
+    client_id = min(available_indices, key=lambda x: work_loads[x])
+    return client_id, get_streamer(client_id)
 
 
 def parse_range_header(range_header: str, file_size: int) -> tuple[int, int]:
@@ -332,25 +332,26 @@ async def media_delivery(request: web.Request):
 
                             if bytes_sent >= content_length:
                                 break
-                    except Exception as e:
-                        # Se o bot secundário falhar, marcamos ele como instável e usamos o Bot 0
-                        if client_id != 0:
-                            logger.error(f"Bot {client_id} falhou no stream: {e}. Banindo por 5 min.")
-                            BLACKLISTED_CLIENTS[client_id] = time.time() + 300 # 5 minutos de ban
-                            
-                            logger.warning(f"Iniciando Fallback imediato para Bot 0...")
-                            client_id = 0
-                            streamer = get_streamer(0)
-                            try:
-                                async for chunk in streamer.stream_file(
-                                        message_id, offset=start + bytes_sent, limit=content_length - bytes_sent):
-                                    yield chunk
-                                    bytes_sent += len(chunk)
-                            except Exception as fe:
-                                logger.error(f"Fallback crítico falhou no Bot 0: {fe}")
-                                raise fe
-                        else:
-                            raise e
+                    except (FloodWait, Exception) as e:
+                        # Se qualquer bot falhar (ID errado ou FloodWait), banimos e tentamos outro
+                        wait_time = getattr(e, 'value', 300) # 5 min se for erro comum
+                        logger.error(f"❌ Bot {client_id} falhou: {e}. Banindo por {wait_time}s.")
+                        BLACKLISTED_CLIENTS[client_id] = time.time() + wait_time
+                        
+                        # Tenta encontrar o próximo bot disponível (Fallback)
+                        try:
+                            next_id, next_streamer = select_optimal_client()
+                            if next_id == client_id:
+                                raise e # Se o seletor devolveu o mesmo, não há o que fazer
+                                
+                            logger.warning(f"🔄 Fallback: Trocando do Bot {client_id} para Bot {next_id}...")
+                            async for chunk in next_streamer.stream_file(
+                                    message_id, offset=start + bytes_sent, limit=content_length - bytes_sent):
+                                yield chunk
+                                bytes_sent += len(chunk)
+                        except Exception as fe:
+                            logger.error(f"🚨 Fallback final falhou: {fe}")
+                            raise fe
                 finally:
                     # Sempre desconta do bot que começou a tarefa original para manter a contagem certa
                     work_loads[initial_client_id] -= 1
