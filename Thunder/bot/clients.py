@@ -73,21 +73,32 @@ async def initialize_clients():
             logger.error(f"   ✖ Failed to start Client ID {client_id}. Error: {e}", exc_info=True)
             return None
 
-    clients = await asyncio.gather(*[start_client(i, token) for i, token in all_tokens.items() if token])
-    clients = [client for client in clients if client]
-
-    multi_clients.update(dict(clients))
+    clients_results = await asyncio.gather(*[start_client(i, token) for i, token in all_tokens.items() if token])
     
+    for res in clients_results:
+        if res:
+            cid, client = res
+            multi_clients[cid] = client
+
     if len(multi_clients) > 1:
         Var.MULTI_CLIENT = True
         print("╠══════════════════════ MULTI-CLIENT ═══════════════════════╣")
         print(f"   ◎ Total Clients: {len(multi_clients)} (Including primary client)")
-        
-        print("   ▶ Initial workload distribution:")
-        for client_id, load in work_loads.items():
-            print(f"   • Client {client_id}: {load} tasks")
-            
     else:
         print("╠═══════════════════════════════════════════════════════════╣")
-        print("   ▶ No additional clients were initialized")
-        print("   ▶ Primary client will handle all requests")
+        print("   ▶ No additional clients available at the moment.")
+
+    # Task de background para tentar religar bots que falharam (útil para FloodWait)
+    failed_tokens = {i: token for i, token in all_tokens.items() if i not in multi_clients}
+    if failed_tokens:
+        async def retry_failed_clients():
+            await asyncio.sleep(60) # Espera 1 minuto antes de tentar a primeira vez
+            for cid, token in failed_tokens.copy().items():
+                if cid not in multi_clients:
+                    res = await start_client(cid, token)
+                    if res:
+                        multi_clients[res[0]] = res[1]
+                        del failed_tokens[cid]
+                        logger.info(f"✅ Cliente {cid} recuperado e ativo!")
+
+        asyncio.create_task(retry_failed_clients())
