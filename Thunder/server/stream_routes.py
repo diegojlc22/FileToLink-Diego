@@ -209,16 +209,21 @@ async def media_delivery(request: web.Request):
         path = request.match_info["path"]
         message_id, secure_hash = parse_media_request(path, request.query)
 
+        # Seleciona um cliente para o trabalho, mas sempre tem o principal (0) como backup
         client_id, streamer = select_optimal_client()
+        main_streamer = get_streamer(0)
         
         try:
-            # Busca informação com timeout curto para não travar o player no "Loading..."
-            file_info = await asyncio.wait_for(streamer.get_file_info(message_id), timeout=4.0)
-        except (asyncio.TimeoutError, Exception) as e:
-            logger.warning(f"Bot {client_id} demorou ou falhou. Usando bot principal como fallback.")
+            # Tenta pegar metadados com o bot selecionado (com timeout)
+            file_info = await asyncio.wait_for(streamer.get_file_info(message_id), timeout=3.0)
+            if not file_info.get('unique_id') or 'error' in file_info:
+                raise Exception("Metadata failed")
+        except:
+            # Se falhar, usa o Bot Principal para garantir o carregamento da página e botões
+            logger.debug(f"Bot {client_id} falhou nos metadados. Usando bot principal.")
+            file_info = await main_streamer.get_file_info(message_id)
             client_id = 0
-            streamer = get_streamer(0)
-            file_info = await streamer.get_file_info(message_id)
+            streamer = main_streamer
 
         work_loads[client_id] += 1
 
