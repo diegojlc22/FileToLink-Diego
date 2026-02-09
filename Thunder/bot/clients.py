@@ -22,10 +22,8 @@ async def cleanup_clients():
             logger.error(f"Error stopping client: {e}", exc_info=True)
 
 async def initialize_clients():
-    print("╠══════════════════ INITIALIZING CLIENTS ═══════════════════╣")
     multi_clients[0] = StreamBot
     work_loads[0] = 0
-    print("   ✓ Primary client initialized")
     try:
         all_tokens = TokenParser().parse_from_env()
         if not all_tokens:
@@ -72,7 +70,6 @@ async def initialize_clients():
                 return None
             
             work_loads[client_id] = 0
-            print(f"   ◎ Client ID {client_id} started")
             return client_id, client
         except Exception as e:
             logger.error(f"   ✖ Failed to start Client ID {client_id}. Error: {e}", exc_info=True)
