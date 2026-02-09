@@ -82,32 +82,33 @@ def parse_media_request(path: str, query: dict) -> tuple[int, str]:
 
 def select_optimal_client() -> tuple[int, ByteStreamer]:
     if not work_loads:
-        raise web.HTTPInternalServerError(
-            text=("No available clients to handle the request."))
+        raise web.HTTPInternalServerError(text="No available clients.")
 
     current_time = time.time()
     
-    # Filtra apenas bots que não estão na lista negra e têm vagas
+    # REGRA DE ESTABILIDADE: Sempre tenta o Bot 0 primeiro.
+    # Ele é o único que garantidamente tem os IDs corretos.
+    if 0 in work_loads and 0 not in BLACKLISTED_CLIENTS:
+        return 0, get_streamer(0)
+    
+    # Se o Bot 0 estiver banido (FloodWait), tenta os secundários
     available_clients = []
     for cid, load in work_loads.items():
-        if load < MAX_CONCURRENT_PER_CLIENT:
-            # Verifica se o bot está banido temporariamente
-            if cid in BLACKLISTED_CLIENTS:
-                if current_time < BLACKLISTED_CLIENTS[cid]:
-                    continue # Ainda está banido
-                else:
-                    del BLACKLISTED_CLIENTS[cid] # Tempo de banimento acabou
-            available_clients.append((cid, load))
+        if cid == 0: continue
+        if cid in BLACKLISTED_CLIENTS:
+            if current_time < BLACKLISTED_CLIENTS[cid]:
+                continue
+            else:
+                del BLACKLISTED_CLIENTS[cid]
+        available_clients.append((cid, load))
 
     if available_clients:
-        # Pega o bot com menos carga da lista de permitidos
+        # Usa o bot secundário com menos carga
         client_id = min(available_clients, key=lambda x: x[1])[0]
-    else:
-        # Se todos estiverem lotados ou banidos, usa o principal ou o menos pior
-        logger.warning("Todos os bots secundários estão banidos ou lotados. Usando Bot 0.")
-        client_id = 0
+        return client_id, get_streamer(client_id)
 
-    return client_id, get_streamer(client_id)
+    # Fallback final: Se tudo falhar, tenta o Bot 0 de novo (ele é o mais resiliente)
+    return 0, get_streamer(0)
 
 
 def parse_range_header(range_header: str, file_size: int) -> tuple[int, int]:
@@ -251,13 +252,9 @@ async def media_delivery(request: web.Request):
         if not file_info or not file_info.get('unique_id'):
             raise FileNotFound("ID único do arquivo não encontrado.")
 
-        # Tenta distribuir a carga entre todos os bots para o streaming real (GET)
-        # Usamos o seletor apenas para o GET. O HEAD (metadados) fica no Bot 0.
-        if request.method == 'GET':
-            client_id, streamer = select_optimal_client()
-        else:
-            client_id = 0
-            streamer = main_streamer
+        # PRIORIDADE TOTAL AO BOT 0 (O único 100% estável para IDs)
+        # Os outros bots só entram se o 0 estiver em FloodWait real.
+        client_id, streamer = select_optimal_client()
 
         work_loads[client_id] += 1
         logger.info(f"▶ [Bot {client_id}] Conexão iniciada. Carga: {work_loads[client_id]}")
