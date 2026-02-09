@@ -20,7 +20,7 @@ routes = web.RouteTableDef()
 
 SECURE_HASH_LENGTH = 6
 CHUNK_SIZE = 1024 * 1024
-MAX_CONCURRENT_PER_CLIENT = 20
+MAX_CONCURRENT_PER_CLIENT = 100
 RANGE_REGEX = re.compile(r"bytes=(?P<start>\d*)-(?P<end>\d*)")
 PATTERN_HASH_FIRST = re.compile(
     rf"^([a-zA-Z0-9_-]{{{SECURE_HASH_LENGTH}}})(\d+)(?:/.*)?$")
@@ -238,6 +238,7 @@ async def media_delivery(request: web.Request):
             streamer = main_streamer
 
         work_loads[client_id] += 1
+        logger.info(f"▶ Nova conexão (Bot {client_id}). Carga atual: {work_loads[client_id]}")
 
         try:
             if not file_info.get('unique_id'):
