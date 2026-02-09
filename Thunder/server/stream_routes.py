@@ -26,6 +26,9 @@ RANGE_REGEX = re.compile(r"bytes=(?P<start>\d*)-(?P<end>\d*)")
 # Cache global de metadados para evitar FloodWait do Telegram no F5
 FILE_INFO_CACHE = {}
 
+# Controle de bots que estão dando erro (ex: Message Not Found)
+BLACKLISTED_CLIENTS = {} # {client_id: expiration_timestamp}
+
 PATTERN_HASH_FIRST = re.compile(
     rf"^([a-zA-Z0-9_-]{{{SECURE_HASH_LENGTH}}})(\d+)(?:/.*)?$")
 PATTERN_ID_FIRST = re.compile(r"^(\d+)(?:/.*)?$")
@@ -80,17 +83,29 @@ def parse_media_request(path: str, query: dict) -> tuple[int, str]:
 def select_optimal_client() -> tuple[int, ByteStreamer]:
     if not work_loads:
         raise web.HTTPInternalServerError(
-            text=("No available clients to handle the request. "
-                  "Please try again later."))
+            text=("No available clients to handle the request."))
 
-    available_clients = [
-        (cid, load) for cid, load in work_loads.items()
-        if load < MAX_CONCURRENT_PER_CLIENT]
+    current_time = time.time()
+    
+    # Filtra apenas bots que não estão na lista negra e têm vagas
+    available_clients = []
+    for cid, load in work_loads.items():
+        if load < MAX_CONCURRENT_PER_CLIENT:
+            # Verifica se o bot está banido temporariamente
+            if cid in BLACKLISTED_CLIENTS:
+                if current_time < BLACKLISTED_CLIENTS[cid]:
+                    continue # Ainda está banido
+                else:
+                    del BLACKLISTED_CLIENTS[cid] # Tempo de banimento acabou
+            available_clients.append((cid, load))
 
     if available_clients:
+        # Pega o bot com menos carga da lista de permitidos
         client_id = min(available_clients, key=lambda x: x[1])[0]
     else:
-        client_id = min(work_loads, key=work_loads.get)
+        # Se todos estiverem lotados ou banidos, usa o principal ou o menos pior
+        logger.warning("Todos os bots secundários estão banidos ou lotados. Usando Bot 0.")
+        client_id = 0
 
     return client_id, get_streamer(client_id)
 
@@ -336,14 +351,22 @@ async def media_delivery(request: web.Request):
                             if bytes_sent >= content_length:
                                 break
                     except Exception as e:
-                        # Se o bot secundário falhar, o bot principal assume de onde parou!
+                        # Se o bot secundário falhar, marcamos ele como instável e usamos o Bot 0
                         if client_id != 0:
-                            logger.warning(f"Bot {client_id} falhou no stream (Erro: {e}). Fallback para Bot 0.")
+                            logger.error(f"Bot {client_id} falhou no stream: {e}. Banindo por 5 min.")
+                            BLACKLISTED_CLIENTS[client_id] = time.time() + 300 # 5 minutos de ban
+                            
+                            logger.warning(f"Iniciando Fallback imediato para Bot 0...")
                             client_id = 0
                             streamer = get_streamer(0)
-                            async for chunk in streamer.stream_file(
-                                    message_id, offset=start + bytes_sent, limit=content_length - bytes_sent):
-                                yield chunk
+                            try:
+                                async for chunk in streamer.stream_file(
+                                        message_id, offset=start + bytes_sent, limit=content_length - bytes_sent):
+                                    yield chunk
+                                    bytes_sent += len(chunk)
+                            except Exception as fe:
+                                logger.error(f"Fallback crítico falhou no Bot 0: {fe}")
+                                raise fe
                         else:
                             raise e
                 finally:
