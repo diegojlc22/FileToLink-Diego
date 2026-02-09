@@ -302,13 +302,8 @@ async def media_delivery(request: web.Request):
                     bytes_sent = 0
                     bytes_to_skip = start % CHUNK_SIZE
 
-            # Tenta iniciar o stream com o bot selecionado
                     try:
-                        # Verificação prévia rápida: se o bot não é o 0, tenta dar um 'get_messages' curto
-                        # para garantir que a sessão "conhece" o canal antes de começar o stream pesado.
-                        if client_id != 0:
-                            await streamer.get_message(message_id)
-
+                        # Tenta iniciar o stream direto
                         async for chunk in streamer.stream_file(
                                 message_id, offset=start, limit=content_length):
                             if bytes_to_skip > 0:

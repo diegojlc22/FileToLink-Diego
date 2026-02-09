@@ -51,10 +51,21 @@ async def initialize_clients():
                 sleep_threshold=Var.SLEEP_THRESHOLD
             )
             try:
-                await client.start()
+                # Tenta iniciar o bot com um tempo limite de 15 segundos
+                await asyncio.wait_for(client.start(), timeout=15.0)
+            except asyncio.TimeoutError:
+                logger.error(f"   ✖ Tempo esgotado ao ligar o Cliente {client_id}. Ignorando.")
+                return None
             except FloodWait as e:
-                await asyncio.sleep(e.value)
-                await client.start()
+                logger.warning(f"   ◎ Cliente {client_id} em FloodWait ({e.value}s).")
+                return None
+            
+            # Pequeno teste para ver se o bot enxerga o canal
+            try:
+                await client.get_chat(Var.BIN_CHANNEL)
+            except Exception:
+                logger.warning(f"   ◎ Cliente {client_id} não tem acesso ao canal BIN_CHANNEL.")
+            
             work_loads[client_id] = 0
             print(f"   ◎ Client ID {client_id} started")
             return client_id, client
