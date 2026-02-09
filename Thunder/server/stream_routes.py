@@ -250,18 +250,10 @@ async def media_delivery(request: web.Request):
         if not file_info or not file_info.get('unique_id'):
             raise FileNotFound("ID único do arquivo não encontrado.")
 
-        # Tenta distribuir a carga entre todos os bots para o streaming real (GET)
-        # Se um bot secundário falhar, o sistema volta para o principal (0) automaticamente.
-        if request.method == 'GET' and request.method != 'HEAD':
-            client_id, streamer = select_optimal_client()
-        else:
-            client_id = 0
-            streamer = main_streamer
-
-        # Se por algum motivo o seletor falhar ou retornar erro, voltamos para o seguro (0)
-        if not streamer:
-            client_id = 0
-            streamer = main_streamer
+        # Por segurança e compatibilidade de IDs, usamos o Bot 0 para o stream principal.
+        # Os outros bots ficam como reserva técnica.
+        client_id = 0
+        streamer = main_streamer
 
         work_loads[client_id] += 1
         logger.info(f"▶ Nova conexão (Bot {client_id}). Carga atual: {work_loads[client_id]}")
