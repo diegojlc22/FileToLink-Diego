@@ -230,14 +230,15 @@ async def media_delivery(request: web.Request):
     try:
         path = request.match_info["path"]
         message_id, secure_hash = parse_media_request(path, request.query)
+        
+        # Define o streamer principal no início para evitar erros de UnboundLocalError
+        main_streamer = get_streamer(0)
 
         # Tenta buscar do cache primeiro (evita FloodWait do Telegram no F5)
         if message_id in FILE_INFO_CACHE:
             file_info = FILE_INFO_CACHE[message_id]
             logger.debug(f"ℹ Usando cache para o arquivo {message_id}")
         else:
-            # SEMPRE usa o bot principal (0) para buscar informações técnicas pela primeira vez
-            main_streamer = get_streamer(0)
             try:
                 file_info = await main_streamer.get_file_info(message_id)
                 if file_info and file_info.get('unique_id'):
