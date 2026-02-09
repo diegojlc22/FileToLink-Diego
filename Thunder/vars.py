@@ -35,7 +35,7 @@ class Var:
 
     NAME: str = os.getenv("NAME", "ThunderF2L")
     SLEEP_THRESHOLD: int = int(os.getenv("SLEEP_THRESHOLD", "600"))
-    WORKERS: int = int(os.getenv("WORKERS", "8"))
+    WORKERS: int = int(os.getenv("WORKERS", "4"))
 
     BIN_CHANNEL: int = int(os.getenv("BIN_CHANNEL", "0"))
 

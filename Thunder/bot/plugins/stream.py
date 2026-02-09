@@ -13,8 +13,7 @@ from Thunder.bot import StreamBot
 from Thunder.utils.bot_utils import (gen_links, is_admin, log_newusr, notify_own,
                                      reply_user_err)
 from Thunder.utils.database import db
-from Thunder.utils.decorators import (check_banned, get_shortener_status,
-                                      require_token)
+from Thunder.utils.decorators import check_banned
 from Thunder.utils.force_channel import force_channel_check
 from Thunder.utils.logger import logger
 from Thunder.utils.messages import (
@@ -64,11 +63,9 @@ def get_link_buttons(links):
 async def validate_request_common(client: Client, message: Message) -> Optional[bool]:
     if not await check_banned(client, message):
         return None
-    if not await require_token(client, message):
-        return None
     if not await force_channel_check(client, message):
         return None
-    return await get_shortener_status(client, message)
+    return True # Always allowed, token system removed.
 
 
 async def send_channel_links(target_msg: Message, links: Dict[str, Any], source_info: str, source_id: int):
@@ -244,11 +241,12 @@ async def link_handler(bot: Client, msg: Message, **kwargs):
         except FloodWait as e:
             await asyncio.sleep(e.value)
             status_msg = await message.reply_text(MSG_PROCESSING_REQUEST, quote=True)
-        shortener_val = handler_kwargs.get('shortener', shortener_val)
+        
+        # Shortener disabled to make bot lighter.
         if num_files == 1:
-            await process_single(client, message, message.reply_to_message, status_msg, shortener_val, notification_msg=notification_msg)
+            await process_single(client, message, message.reply_to_message, status_msg, False, notification_msg=notification_msg)
         else:
-            await process_batch(client, message, message.reply_to_message.id, num_files, status_msg, shortener_val, notification_msg=notification_msg)
+            await process_batch(client, message, message.reply_to_message.id, num_files, status_msg, False, notification_msg=notification_msg)
 
     await handle_rate_limited_request(bot, msg, _actual_link_handler, **kwargs)
 
@@ -276,7 +274,7 @@ async def private_receive_handler(bot: Client, msg: Message, **kwargs):
         except FloodWait as e:
             await asyncio.sleep(e.value)
             status_msg = await message.reply_text(MSG_PROCESSING_FILE, quote=True)
-        await process_single(client, message, message, status_msg, shortener_val, notification_msg=notification_msg)
+        await process_single(client, message, message, status_msg, False, notification_msg=notification_msg)
 
     await handle_rate_limited_request(bot, msg, _actual_private_receive_handler, **kwargs)
 
@@ -319,8 +317,7 @@ async def channel_receive_handler(bot: Client, msg: Message):
                 logger.error(
                     f"Failed to forward media from channel {message.chat.id}. Ignoring.")
                 return
-            shortener_val = await get_shortener_status(client, message)
-            links = await gen_links(stored_msg, shortener=shortener_val)
+            links = await gen_links(stored_msg, shortener=False)
             source_info = message.chat.title or "Unknown Channel"
 
             if notification_msg:

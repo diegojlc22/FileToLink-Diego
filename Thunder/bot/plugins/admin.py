@@ -18,32 +18,18 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from Thunder import StartTime, __version__
 from Thunder.bot import StreamBot, multi_clients, work_loads
 from Thunder.utils.bot_utils import reply
-from Thunder.utils.broadcast import broadcast_message
 from Thunder.utils.database import db
 from Thunder.utils.human_readable import humanbytes
 from Thunder.utils.logger import LOG_FILE, logger
 from Thunder.utils.messages import (
-    MSG_ADMIN_AUTH_LIST_HEADER, MSG_ADMIN_NO_BAN_REASON,
-    MSG_ADMIN_USER_BANNED, MSG_ADMIN_USER_UNBANNED, MSG_AUTHORIZE_FAILED,
-    MSG_AUTHORIZE_SUCCESS, MSG_AUTHORIZE_USAGE, MSG_AUTH_USER_INFO,
-    MSG_BAN_REASON_SUFFIX, MSG_BAN_USAGE, MSG_BROADCAST_USAGE,
-    MSG_BUTTON_CLOSE, MSG_CANNOT_BAN_OWNER, MSG_CHANNEL_BANNED,
-    MSG_CHANNEL_BANNED_REASON_SUFFIX, MSG_CHANNEL_NOT_BANNED,
-    MSG_CHANNEL_UNBANNED, MSG_DB_ERROR, MSG_DB_STATS,
-    MSG_DEAUTHORIZE_FAILED, MSG_DEAUTHORIZE_SUCCESS,
-    MSG_DEAUTHORIZE_USAGE, MSG_ERROR_GENERIC, MSG_INVALID_BROADCAST_CMD,
-    MSG_INVALID_USER_ID, MSG_LOG_FILE_CAPTION, MSG_LOG_FILE_EMPTY,
-    MSG_LOG_FILE_MISSING, MSG_NO_AUTH_USERS, MSG_RESTARTING, MSG_SHELL_ERROR,
-    MSG_SHELL_EXECUTING, MSG_SHELL_NO_OUTPUT, MSG_SHELL_OUTPUT,
-    MSG_SHELL_OUTPUT_STDERR, MSG_SHELL_OUTPUT_STDOUT, MSG_SHELL_USAGE,
+    MSG_BUTTON_CLOSE, MSG_DB_ERROR, MSG_DB_STATS,
+    MSG_ERROR_GENERIC, MSG_LOG_FILE_CAPTION, MSG_LOG_FILE_EMPTY,
+    MSG_LOG_FILE_MISSING, MSG_RESTARTING, 
     MSG_SPEEDTEST_ERROR, MSG_SPEEDTEST_INIT, MSG_SPEEDTEST_RESULT,
     MSG_STATUS_ERROR, MSG_SYSTEM_STATS, MSG_SYSTEM_STATUS,
-    MSG_UNBAN_USAGE, MSG_USER_BANNED_NOTIFICATION,
-    MSG_USER_NOT_IN_BAN_LIST, MSG_USER_UNBANNED_NOTIFICATION,
     MSG_WORKLOAD_ITEM
 )
 from Thunder.utils.time_format import get_readable_time
-from Thunder.utils.tokens import authorize, deauthorize, list_allowed
 from Thunder.utils.speedtest import run_speedtest
 from Thunder.vars import Var
 
@@ -64,30 +50,7 @@ async def get_total_users(client: Client, message: Message):
         await reply(message, text=MSG_DB_ERROR)
 
 
-@StreamBot.on_message(filters.command("broadcast") & owner_filter)
-async def broadcast_handler(client: Client, message: Message):
-    mode = "all"
-    if len(message.command) > 1:
-        arg = message.command[1].lower().strip()
-        if arg in ("help", "--help", "-h"):
-            return await reply(message, text=MSG_BROADCAST_USAGE, parse_mode=ParseMode.MARKDOWN)
-        if arg == "authorized":
-            mode = "authorized"
-        elif arg == "regular":
-            mode = "regular"
-        else:
-            safe_arg = arg.replace("`", "'")
-            await reply(
-                message,
-                text=f"❌ **Invalid argument:** `{safe_arg}`\n\n{MSG_BROADCAST_USAGE}",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
 
-    if not message.reply_to_message:
-        return await reply(message, text=MSG_INVALID_BROADCAST_CMD)
-
-    await broadcast_message(client, message, mode=mode)
 
 
 @StreamBot.on_message(filters.command("status") & owner_filter)
@@ -189,232 +152,10 @@ async def send_logs(client: Client, message: Message):
         await reply(message, text=MSG_ERROR_GENERIC)
 
 
-@StreamBot.on_message(filters.command("authorize") & owner_filter)
-async def authorize_command(client: Client, message: Message):
-    if len(message.command) != 2:
-        return await reply(
-            message, text=MSG_AUTHORIZE_USAGE, parse_mode=ParseMode.MARKDOWN)
-    
-    try:
-        user_id = int(message.command[1])
-        success = await authorize(user_id, message.from_user.id)
-        await reply(message,
-                    text=((MSG_AUTHORIZE_SUCCESS.format(user_id=user_id) if success else MSG_AUTHORIZE_FAILED.format(user_id=user_id))))
-    except ValueError:
-        await reply(message, text=MSG_INVALID_USER_ID)
-    except Exception as e:
-        logger.error(f"Error in authorize_command: {e}", exc_info=True)
-        await reply(message, text=MSG_ERROR_GENERIC)
+# Commands for Authorization, Banning, and Shell have been removed to make the bot lighter.
 
 
-@StreamBot.on_message(filters.command("deauthorize") & owner_filter)
-async def deauthorize_command(client: Client, message: Message):
-    if len(message.command) != 2:
-        return await reply(
-            message, text=MSG_DEAUTHORIZE_USAGE, parse_mode=ParseMode.MARKDOWN)
-    
-    try:
-        user_id = int(message.command[1])
-        success = await deauthorize(user_id)
-        await reply(message,
-                    text=((MSG_DEAUTHORIZE_SUCCESS.format(user_id=user_id) if success else MSG_DEAUTHORIZE_FAILED.format(user_id=user_id))))
-    except ValueError:
-        await reply(message, text=MSG_INVALID_USER_ID)
-    except Exception as e:
-        logger.error(f"Error in deauthorize_command: {e}", exc_info=True)
-        await reply(message, text=MSG_ERROR_GENERIC)
 
-
-@StreamBot.on_message(filters.command("listauth") & owner_filter)
-async def list_authorized_command(client: Client, message: Message):
-    users = await list_allowed()
-    if not users:
-        return await reply(
-            message, text=MSG_NO_AUTH_USERS)
-    
-    text = MSG_ADMIN_AUTH_LIST_HEADER
-    for i, user in enumerate(users, 1):
-        text += MSG_AUTH_USER_INFO.format(
-            i=i, user_id=user['user_id'],
-            authorized_by=user['authorized_by'],
-            auth_time=user['authorized_at']
-        )
-    
-    await reply(message,
-                text=text,
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton(MSG_BUTTON_CLOSE, callback_data="close_panel")]]))
-
-
-@StreamBot.on_message(filters.command("ban") & owner_filter)
-async def ban_command(client: Client, message: Message):
-    if len(message.command) < 2:
-        return await reply(message, text=MSG_BAN_USAGE)
-
-    try:
-        target_id = int(message.command[1])
-        reason = " ".join(message.command[2:]) or MSG_ADMIN_NO_BAN_REASON
-        banned_by_id = message.from_user.id if message.from_user else None
-
-        if target_id == Var.OWNER_ID:
-            return await reply(message, text=MSG_CANNOT_BAN_OWNER)
-
-        if target_id < 0:
-            await db.add_banned_channel(
-                channel_id=target_id,
-                reason=reason,
-                banned_by=banned_by_id
-            )
-            text = MSG_CHANNEL_BANNED.format(channel_id=target_id)
-            if reason != MSG_ADMIN_NO_BAN_REASON:
-                text += MSG_CHANNEL_BANNED_REASON_SUFFIX.format(reason=reason)
-            await reply(message, text=text)
-            try:
-                try:
-                    await client.leave_chat(target_id)
-                except FloodWait as e:
-                    logger.debug(f"FloodWait in leave_chat, sleeping for {e.value}s")
-                    await asyncio.sleep(e.value)
-                    await client.leave_chat(target_id)
-            except Exception as e:
-                logger.warning(f"Could not leave banned channel {target_id}: {e}", exc_info=True)
-        else:
-            await db.add_banned_user(
-                user_id=target_id,
-                reason=reason,
-                banned_by=banned_by_id
-            )
-            text = MSG_ADMIN_USER_BANNED.format(user_id=target_id)
-            if reason != MSG_ADMIN_NO_BAN_REASON:
-                text += MSG_BAN_REASON_SUFFIX.format(reason=reason)
-            await reply(message, text=text)
-            try:
-                try:
-                    await client.send_message(target_id, MSG_USER_BANNED_NOTIFICATION)
-                except FloodWait as e:
-                    logger.debug(f"FloodWait in ban notification, sleeping for {e.value}s")
-                    await asyncio.sleep(e.value)
-                    await client.send_message(target_id, MSG_USER_BANNED_NOTIFICATION)
-            except Exception as e:
-                logger.warning(f"Could not notify banned user {target_id}: {e}", exc_info=True)
-
-    except ValueError:
-        await reply(message, text=MSG_INVALID_USER_ID)
-    except Exception as e:
-        logger.error(f"Error in ban_command: {e}", exc_info=True)
-        await reply(message, text=MSG_ERROR_GENERIC)
-
-
-@StreamBot.on_message(filters.command("unban") & owner_filter)
-async def unban_command(client: Client, message: Message):
-    if len(message.command) != 2:
-        return await reply(message, text=MSG_UNBAN_USAGE)
-
-    try:
-        target_id = int(message.command[1])
-
-        if target_id < 0:
-            if await db.remove_banned_channel(channel_id=target_id):
-                await reply(message, text=MSG_CHANNEL_UNBANNED.format(channel_id=target_id))
-            else:
-                await reply(message, text=MSG_CHANNEL_NOT_BANNED.format(channel_id=target_id))
-        else:
-            if await db.remove_banned_user(user_id=target_id):
-                await reply(message, text=MSG_ADMIN_USER_UNBANNED.format(user_id=target_id))
-                try:
-                    try:
-                        await client.send_message(target_id, MSG_USER_UNBANNED_NOTIFICATION)
-                    except FloodWait as e:
-                        logger.debug(f"FloodWait in unban notification, sleeping for {e.value}s")
-                        await asyncio.sleep(e.value)
-                        await client.send_message(target_id, MSG_USER_UNBANNED_NOTIFICATION)
-                except Exception as e:
-                    logger.warning(f"Could not notify unbanned user {target_id}: {e}", exc_info=True)
-            else:
-                await reply(message, text=MSG_USER_NOT_IN_BAN_LIST.format(user_id=target_id))
-    except ValueError:
-        await reply(message, text=MSG_INVALID_USER_ID)
-    except Exception as e:
-        logger.error(f"Error in unban_command: {e}", exc_info=True)
-        await reply(message, text=MSG_ERROR_GENERIC)
-
-
-@StreamBot.on_message(filters.command("shell") & owner_filter)
-async def run_shell_command(client: Client, message: Message):
-    if len(message.command) < 2:
-        return await reply(
-            message, text=MSG_SHELL_USAGE, parse_mode=ParseMode.HTML)
-    
-    command = " ".join(message.command[1:])
-    status_msg = await reply(message,
-                text=MSG_SHELL_EXECUTING.format(
-                    command=html.escape(command)),
-                parse_mode=ParseMode.HTML)
-    
-    try:
-        process = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        stdout, stderr = await process.communicate()
-        
-        output = ""
-        if stdout:
-            output += MSG_SHELL_OUTPUT_STDOUT.format(
-                output=html.escape(stdout.decode(errors='ignore')))
-        if stderr:
-            output += MSG_SHELL_OUTPUT_STDERR.format(
-                error=html.escape(stderr.decode(errors='ignore')))
-        
-        output = output.strip() or MSG_SHELL_NO_OUTPUT
-        
-        try:
-            await status_msg.delete()
-        except FloodWait as e:
-            logger.debug(f"FloodWait in shell status message delete, sleeping for {e.value}s")
-            await asyncio.sleep(e.value)
-            await status_msg.delete()
-        
-        if len(output) > 4096:
-            file = BytesIO(output.encode())
-            file.name = "shell_output.txt"
-            try:
-                await message.reply_document(
-                    file,
-                    caption=MSG_SHELL_OUTPUT.format(
-                        command=html.escape(command)))
-            except FloodWait as e:
-                logger.debug(f"FloodWait in shell output document, sleeping for {e.value}s")
-                await asyncio.sleep(e.value)
-                await message.reply_document(
-                    file,
-                    caption=MSG_SHELL_OUTPUT.format(
-                        command=html.escape(command)))
-        else:
-            await reply(message, text=output, parse_mode=ParseMode.HTML)
-            
-    except Exception as e:
-        try:
-            try:
-                await status_msg.edit_text(
-                    MSG_SHELL_ERROR.format(error=html.escape(str(e))),
-                    parse_mode=ParseMode.HTML)
-            except FloodWait as e:
-                logger.debug(f"FloodWait in shell error message edit, sleeping for {e.value}s")
-                await asyncio.sleep(e.value)
-                await status_msg.edit_text(
-                    MSG_SHELL_ERROR.format(error=html.escape(str(e))),
-                    parse_mode=ParseMode.HTML)
-            except MessageNotModified:
-                pass
-        except Exception:
-            await reply(
-                message,
-                text=MSG_SHELL_ERROR.format(error=html.escape(str(e))),
-                parse_mode=ParseMode.HTML)
 
 
 @StreamBot.on_message(filters.command("speedtest") & owner_filter)

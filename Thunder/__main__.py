@@ -24,7 +24,7 @@ from Thunder.utils.keepalive import ping_server
 from Thunder.utils.logger import logger
 from Thunder.utils.messages import MSG_ADMIN_RESTART_DONE
 from Thunder.utils.rate_limiter import rate_limiter, request_executor
-from Thunder.utils.tokens import cleanup_expired_tokens
+# from Thunder.utils.tokens import cleanup_expired_tokens  # Tokens removed
 from Thunder.vars import Var
 
 
@@ -188,9 +188,10 @@ async def start_services():
             ping_server(), name="keepalive_task"
         )
         print("   ✓ Keep-alive service started")
-        token_cleanup_task = asyncio.create_task(
-            schedule_token_cleanup(), name="token_cleanup_task"
-        )
+        # token_cleanup_task = asyncio.create_task(
+        #     schedule_token_cleanup(), name="token_cleanup_task"
+        # )
+        token_cleanup_task = None
 
     except Exception as e:
         logger.error(f"   ✖ Failed to start Web Server: {e}", exc_info=True)
@@ -223,11 +224,7 @@ async def start_services():
     print("╚═══════════════════════════════════════════════════════════╝")
     print("   ▶ Bot is now running! Press CTRL+C to stop.")
 
-    background_tasks = [
-        request_executor_task,
-        keepalive_task,
-        token_cleanup_task
-    ]
+    background_tasks = [t for t in [request_executor_task, keepalive_task, token_cleanup_task] if t is not None]
 
     try:
         await idle()
@@ -263,7 +260,8 @@ async def schedule_token_cleanup():
     while True:
         try:
             await asyncio.sleep(3 * 3600)
-            await cleanup_expired_tokens()
+            # await cleanup_expired_tokens() # Tokens removed
+            pass
         except asyncio.CancelledError:
             logger.debug("schedule_token_cleanup cancelled cleanly.")
             break
