@@ -251,23 +251,18 @@ async def media_delivery(request: web.Request):
         if not file_info or not file_info.get('unique_id'):
             raise FileNotFound("ID único do arquivo não encontrado.")
 
-        # Por segurança e compatibilidade de IDs, usamos o Bot 0 para o stream principal.
-        # Os outros bots ficam como reserva técnica.
-        client_id = 0
-        streamer = main_streamer
+        # Tenta distribuir a carga entre todos os bots para o streaming real (GET)
+        # Usamos o seletor apenas para o GET. O HEAD (metadados) fica no Bot 0.
+        if request.method == 'GET':
+            client_id, streamer = select_optimal_client()
+        else:
+            client_id = 0
+            streamer = main_streamer
 
         work_loads[client_id] += 1
-        logger.info(f"▶ Nova conexão (Bot {client_id}). Carga atual: {work_loads[client_id]}")
+        logger.info(f"▶ [Bot {client_id}] Conexão iniciada. Carga: {work_loads[client_id]}")
 
         try:
-            if not file_info.get('unique_id'):
-                raise FileNotFound("O arquivo não foi encontrado por nenhum dos bots.")
-
-            # A verificação de hash é desativada para suportar Multi-Client, 
-            # já que cada bot vê um file_unique_id diferente no Telegram.
-            # if (file_info['unique_id'][:SECURE_HASH_LENGTH] != secure_hash):
-            #     raise InvalidHash("Provided hash does not match file's unique ID.")
-
             file_size = file_info.get('file_size', 0)
             if file_size == 0:
                 raise FileNotFound(
@@ -293,16 +288,13 @@ async def media_delivery(request: web.Request):
             headers = {
                 "Content-Type": mime_type,
                 "Content-Length": str(content_length),
-                "Content-Disposition": (
-                    f"inline; filename*=UTF-8''{quote(filename)}"),
                 "Accept-Ranges": "bytes",
-                "Cache-Control": "public, max-age=31536000",
-                "Connection": "keep-alive",
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Range, Content-Type, *",
-                "Access-Control-Expose-Headers": (
-                    "Content-Length, Content-Range, Content-Disposition"),
-                "X-Content-Type-Options": "nosniff"
+                "Content-Disposition": f'inline; filename="{quote(filename)}"',
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "X-Content-Type-Options": "nosniff",
+                **CORS_HEADERS
             }
 
             if range_header:
