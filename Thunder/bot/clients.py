@@ -59,12 +59,17 @@ async def initialize_clients():
             except FloodWait as e:
                 logger.warning(f"   ◎ Cliente {client_id} em FloodWait ({e.value}s).")
                 return None
-            
-            # Pequeno teste para ver se o bot enxerga o canal
+
+            # Pequeno teste/aquecimento: força o bot a conhecer o canal após ligar
             try:
-                await client.get_chat(Var.BIN_CHANNEL)
-            except Exception:
-                logger.warning(f"   ◎ Cliente {client_id} não tem acesso ao canal BIN_CHANNEL.")
+                chat = await client.get_chat(Var.BIN_CHANNEL)
+                logger.info(f"   ✓ Cliente {client_id} conectado ao canal: {chat.title}")
+            except Exception as e:
+                logger.error(f"   ✖ Cliente {client_id} NÃO TEM ACESSO ao canal {Var.BIN_CHANNEL}! Erro: {e}")
+                # Se for o bot principal, isso é fatal. Se for secundário, apenas ignoramos ele.
+                if client_id == 0:
+                    raise e
+                return None
             
             work_loads[client_id] = 0
             print(f"   ◎ Client ID {client_id} started")
