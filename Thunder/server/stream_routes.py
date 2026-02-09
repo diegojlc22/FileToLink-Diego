@@ -288,6 +288,7 @@ async def media_delivery(request: web.Request):
 
             async def stream_generator():
                 nonlocal client_id, streamer
+                initial_client_id = client_id
                 try:
                     bytes_sent = 0
                     bytes_to_skip = start % CHUNK_SIZE
@@ -316,7 +317,7 @@ async def media_delivery(request: web.Request):
                     except Exception as e:
                         # Se o bot secundário falhar, o bot principal assume de onde parou!
                         if client_id != 0:
-                            logger.warning(f"Bot {client_id} falhou no meio do stream. Fallback para Bot 0.")
+                            logger.warning(f"Bot {client_id} falhou no stream (Erro: {e}). Fallback para Bot 0.")
                             client_id = 0
                             streamer = get_streamer(0)
                             async for chunk in streamer.stream_file(
@@ -325,7 +326,8 @@ async def media_delivery(request: web.Request):
                         else:
                             raise e
                 finally:
-                    work_loads[client_id] -= 1
+                    # Sempre desconta do bot que começou a tarefa original para manter a contagem certa
+                    work_loads[initial_client_id] -= 1
 
             return web.Response(
                 status=206 if range_header else 200,
