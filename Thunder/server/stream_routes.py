@@ -22,6 +22,10 @@ SECURE_HASH_LENGTH = 6
 CHUNK_SIZE = 1024 * 1024
 MAX_CONCURRENT_PER_CLIENT = 100
 RANGE_REGEX = re.compile(r"bytes=(?P<start>\d*)-(?P<end>\d*)")
+
+# Cache global de metadados para evitar FloodWait do Telegram no F5
+FILE_INFO_CACHE = {}
+
 PATTERN_HASH_FIRST = re.compile(
     rf"^([a-zA-Z0-9_-]{{{SECURE_HASH_LENGTH}}})(\d+)(?:/.*)?$")
 PATTERN_ID_FIRST = re.compile(r"^(\d+)(?:/.*)?$")
@@ -212,16 +216,23 @@ async def media_delivery(request: web.Request):
         path = request.match_info["path"]
         message_id, secure_hash = parse_media_request(path, request.query)
 
-        # SEMPRE usa o bot principal (0) para buscar informações técnicas (nome, tamanho, etc.)
-        # Isso garante que a página e os botões carreguem INSTANTANEAMENTE sem 'Loading...'
-        main_streamer = get_streamer(0)
-        try:
-            file_info = await main_streamer.get_file_info(message_id)
-        except Exception as e:
-            logger.error(f"Erro crítico: Bot principal não conseguiu acessar arquivo {message_id}: {e}")
-            raise FileNotFound("Arquivo não encontrado no bot principal.")
+        # Tenta buscar do cache primeiro (evita FloodWait do Telegram no F5)
+        if message_id in FILE_INFO_CACHE:
+            file_info = FILE_INFO_CACHE[message_id]
+            logger.debug(f"ℹ Usando cache para o arquivo {message_id}")
+        else:
+            # SEMPRE usa o bot principal (0) para buscar informações técnicas pela primeira vez
+            main_streamer = get_streamer(0)
+            try:
+                file_info = await main_streamer.get_file_info(message_id)
+                if file_info and file_info.get('unique_id'):
+                    FILE_INFO_CACHE[message_id] = file_info
+                    logger.info(f"✅ Metadados salvos no cache para o arquivo {message_id}")
+            except Exception as e:
+                logger.error(f"Erro crítico: Bot principal não conseguiu acessar arquivo {message_id}: {e}")
+                raise FileNotFound("Arquivo não encontrado no bot principal.")
 
-        if not file_info.get('unique_id'):
+        if not file_info or not file_info.get('unique_id'):
             raise FileNotFound("ID único do arquivo não encontrado.")
 
         # Tenta distribuir a carga entre todos os bots para o streaming real (GET)
