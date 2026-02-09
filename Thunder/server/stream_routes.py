@@ -186,6 +186,9 @@ async def media_preview(request: web.Request):
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Allow-Headers": "Range, Content-Type, *",
                 "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0"
             }
         )
         response.enable_compression()
