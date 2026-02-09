@@ -209,19 +209,22 @@ async def media_delivery(request: web.Request):
         path = request.match_info["path"]
         message_id, secure_hash = parse_media_request(path, request.query)
 
-        # Seleciona um cliente para o trabalho, mas sempre tem o principal (0) como backup
-        client_id, streamer = select_optimal_client()
+        # SEMPRE usa o bot principal (0) para buscar informações técnicas (nome, tamanho, etc.)
+        # Isso garante que a página e os botões carreguem INSTANTANEAMENTE sem 'Loading...'
         main_streamer = get_streamer(0)
-        
         try:
-            # Tenta pegar metadados com o bot selecionado (com timeout)
-            file_info = await asyncio.wait_for(streamer.get_file_info(message_id), timeout=3.0)
-            if not file_info.get('unique_id') or 'error' in file_info:
-                raise Exception("Metadata failed")
-        except:
-            # Se falhar, usa o Bot Principal para garantir o carregamento da página e botões
-            logger.debug(f"Bot {client_id} falhou nos metadados. Usando bot principal.")
             file_info = await main_streamer.get_file_info(message_id)
+        except Exception as e:
+            logger.error(f"Erro crítico: Bot principal não conseguiu acessar arquivo {message_id}: {e}")
+            raise FileNotFound("Arquivo não encontrado no bot principal.")
+
+        if not file_info.get('unique_id'):
+            raise FileNotFound("ID único do arquivo não encontrado.")
+
+        # Seleciona o bot para o streaming real (GET) para dividir a carga
+        if request.method == 'GET' and request.method != 'HEAD':
+            client_id, streamer = select_optimal_client()
+        else:
             client_id = 0
             streamer = main_streamer
 
@@ -284,29 +287,43 @@ async def media_delivery(request: web.Request):
                 )
 
             async def stream_generator():
+                nonlocal client_id, streamer
                 try:
                     bytes_sent = 0
                     bytes_to_skip = start % CHUNK_SIZE
 
-                    async for chunk in streamer.stream_file(
-                            message_id, offset=start, limit=content_length):
-                        if bytes_to_skip > 0:
-                            if len(chunk) <= bytes_to_skip:
-                                bytes_to_skip -= len(chunk)
-                                continue
-                            chunk = chunk[bytes_to_skip:]
-                            bytes_to_skip = 0
+                    try:
+                        # Tenta iniciar o stream com o bot selecionado
+                        async for chunk in streamer.stream_file(
+                                message_id, offset=start, limit=content_length):
+                            if bytes_to_skip > 0:
+                                if len(chunk) <= bytes_to_skip:
+                                    bytes_to_skip -= len(chunk)
+                                    continue
+                                chunk = chunk[bytes_to_skip:]
+                                bytes_to_skip = 0
 
-                        remaining = content_length - bytes_sent
-                        if len(chunk) > remaining:
-                            chunk = chunk[:remaining]
+                            remaining = content_length - bytes_sent
+                            if len(chunk) > remaining:
+                                chunk = chunk[:remaining]
 
-                        if chunk:
-                            yield chunk
-                            bytes_sent += len(chunk)
+                            if chunk:
+                                yield chunk
+                                bytes_sent += len(chunk)
 
-                        if bytes_sent >= content_length:
-                            break
+                            if bytes_sent >= content_length:
+                                break
+                    except Exception as e:
+                        # Se o bot secundário falhar, o bot principal assume de onde parou!
+                        if client_id != 0:
+                            logger.warning(f"Bot {client_id} falhou no meio do stream. Fallback para Bot 0.")
+                            client_id = 0
+                            streamer = get_streamer(0)
+                            async for chunk in streamer.stream_file(
+                                    message_id, offset=start + bytes_sent, limit=content_length - bytes_sent):
+                                yield chunk
+                        else:
+                            raise e
                 finally:
                     work_loads[client_id] -= 1
 
