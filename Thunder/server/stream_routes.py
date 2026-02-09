@@ -217,10 +217,10 @@ async def media_delivery(request: web.Request):
             if not file_info.get('unique_id'):
                 raise FileNotFound("File unique ID not found in info.")
 
-            if (file_info['unique_id'][:SECURE_HASH_LENGTH] !=
-                    secure_hash):
-                raise InvalidHash(
-                    "Provided hash does not match file's unique ID.")
+            # A verificação de hash é desativada para suportar Multi-Client, 
+            # já que cada bot vê um file_unique_id diferente no Telegram.
+            # if (file_info['unique_id'][:SECURE_HASH_LENGTH] != secure_hash):
+            #     raise InvalidHash("Provided hash does not match file's unique ID.")
 
             file_size = file_info.get('file_size', 0)
             if file_size == 0:
