@@ -221,13 +221,12 @@ async def media_delivery(request: web.Request):
         if not file_info.get('unique_id'):
             raise FileNotFound("ID único do arquivo não encontrado.")
 
-        # Seleciona o bot para o streaming real (GET) para dividir a carga
-        if request.method == 'GET' and request.method != 'HEAD':
-            client_id, streamer = select_optimal_client()
-        else:
-            client_id = 0
-            streamer = main_streamer
-
+        # ESTABILIDADE TOTAL: Forçamos o uso do Bot Principal (0) para o Streaming.
+        # Os bots Multi-Token continuam ativos para responder comandos e dividir a carga do bot,
+        # mas o streaming de vídeo fica centralizado no bot principal para evitar quedas.
+        client_id = 0
+        streamer = get_streamer(0)
+        
         work_loads[client_id] += 1
 
         try:
