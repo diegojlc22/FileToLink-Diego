@@ -8,8 +8,6 @@ from Thunder.utils.database import db
 from Thunder.utils.logger import logger
 from Thunder.utils.messages import (MSG_DECORATOR_BANNED,
                                     MSG_ERROR_UNAUTHORIZED, MSG_TOKEN_INVALID)
-from Thunder.utils.shortener import shorten
-from Thunder.utils.tokens import allowed, check, generate
 from Thunder.vars import Var
 
 
@@ -53,107 +51,7 @@ async def check_banned(client, message: Message):
         logger.error(f"Error in check_banned: {e}", exc_info=True)
         return True
 
-async def require_token(client, message: Message):
-    try:
-        if not message.from_user:
-            return True
 
-        if not getattr(Var, "TOKEN_ENABLED", False):
-            return True
-
-        user_id = message.from_user.id
-        if user_id == Var.OWNER_ID or await allowed(user_id) or await check(user_id):
-            return True
-
-        temp_token_string = None
-        try:
-            temp_token_string = await generate(user_id)
-        except Exception as e:
-            logger.error(f"Failed to generate temporary token for user {user_id} in require_token: {e}", exc_info=True)
-            try:
-                await message.reply_text("Sorry, could not generate an access token link. Please try again later.", quote=True)
-            except FloodWait as e:
-                await asyncio.sleep(e.value)
-                await message.reply_text("Sorry, could not generate an access token link. Please try again later.", quote=True)
-            return False
-
-        if not temp_token_string:
-            logger.error(f"Temporary token generation returned empty for user {user_id} in require_token.", exc_info=True)
-            try:
-                await message.reply_text("Sorry, could not generate an access token link. Please try again later.", quote=True)
-            except FloodWait as e:
-                await asyncio.sleep(e.value)
-                await message.reply_text("Sorry, could not generate an access token link. Please try again later.", quote=True)
-            return False
-
-        try:
-            me = await client.get_me()
-        except FloodWait as e:
-            await asyncio.sleep(e.value)
-            me = await client.get_me()
-        if not me:
-            logger.error(f"Failed to get bot info for user {user_id} in require_token.", exc_info=True)
-            try:
-                await message.reply_text("Sorry, an unexpected error occurred. Please try again later.", quote=True)
-            except FloodWait as e:
-                await asyncio.sleep(e.value)
-                await message.reply_text("Sorry, an unexpected error occurred. Please try again later.", quote=True)
-            return False
-        deep_link = f"https://t.me/{me.username}?start={temp_token_string}"
-        short_url = deep_link
-
-        try:
-            short_url_result = await shorten(deep_link)
-            if short_url_result:
-                short_url = short_url_result
-        except Exception as e:
-            logger.warning(f"Failed to shorten token link for user {user_id}: {e}. Using full link.", exc_info=True)
-
-        try:
-            await message.reply_text(
-                MSG_TOKEN_INVALID,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("Activate Access", url=short_url)]
-                ]),
-                quote=True
-            )
-        except FloodWait as e:
-            await asyncio.sleep(e.value)
-            await message.reply_text(
-                MSG_TOKEN_INVALID,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("Activate Access", url=short_url)]
-                ]),
-                quote=True
-            )
-        logger.debug(f"Sent temporary token activation link to user {user_id}.")
-        return False
-    except Exception as e:
-        logger.error(f"Error in require_token: {e}", exc_info=True)
-        try:
-            try:
-                await message.reply_text("An error occurred while checking your authorization. Please try again.", quote=True)
-            except FloodWait as e:
-                await asyncio.sleep(e.value)
-                await message.reply_text("An error occurred while checking your authorization. Please try again.", quote=True)
-        except Exception as inner_e:
-            logger.error(f"Failed to send error message to user in require_token: {inner_e}", exc_info=True)
-        return False
-
-async def get_shortener_status(client, message: Message):
-    try:
-        user_id = message.from_user.id if message.from_user else None
-        use_shortener = getattr(Var, "SHORTEN_MEDIA_LINKS", False)
-        if user_id:
-            try:
-                if user_id == Var.OWNER_ID or await allowed(user_id):
-                    use_shortener = False
-            except Exception as e:
-                logger.warning(f"Error checking allowed status for user {user_id} in get_shortener_status: {e}. Defaulting shortener behavior.", exc_info=True)
-        return use_shortener
-    except Exception as e:
-        logger.error(f"Error in get_shortener_status: {e}", exc_info=True)
-        return getattr(Var, "SHORTEN_MEDIA_LINKS", False)
 
 async def owner_only(client, update):
     try:

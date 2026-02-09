@@ -178,10 +178,10 @@ async def start_services():
 
     print("   ▶ Starting Web Server initialization...")
     try:
-        app_runner = web.AppRunner(await web_server())
+        app_runner = web.AppRunner(await web_server(), access_log=None)
         await app_runner.setup()
         bind_address = Var.BIND_ADDRESS
-        site = web.TCPSite(app_runner, bind_address, Var.PORT, access_log=None)
+        site = web.TCPSite(app_runner, bind_address, Var.PORT)
         await site.start()
 
         keepalive_task = asyncio.create_task(

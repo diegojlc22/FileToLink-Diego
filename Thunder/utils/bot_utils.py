@@ -16,7 +16,6 @@ from Thunder.utils.human_readable import humanbytes
 from Thunder.utils.logger import logger
 from Thunder.utils.messages import (MSG_BUTTON_GET_HELP, MSG_DC_UNKNOWN,
                                     MSG_DC_USER_INFO, MSG_NEW_USER)
-from Thunder.utils.shortener import shorten
 from Thunder.vars import Var
 
 
@@ -89,19 +88,8 @@ async def gen_links(fwd_msg: Message, shortener: bool = True) -> Dict[str, str]:
     slink = f"{base_url}/watch/{f_hash}{fid}/{enc_fname}"
     olink = f"{base_url}/{f_hash}{fid}/{enc_fname}"
     
-    if shortener and getattr(Var, "SHORTEN_MEDIA_LINKS", False):
-        try:
-            s_results = await asyncio.gather(shorten(slink), shorten(olink), return_exceptions=True)
-            if not isinstance(s_results[0], Exception):
-                slink = s_results[0]
-            else:
-                logger.warning(f"Failed to shorten stream_link: {s_results[0]}")
-            if not isinstance(s_results[1], Exception):
-                olink = s_results[1]
-            else:
-                logger.warning(f"Failed to shorten online_link: {s_results[1]}")
-        except Exception as e:
-            logger.error(f"Error during link shortening: {e}")
+    # Shortening removed for performance
+    pass
     
     return {"stream_link": slink, "online_link": olink, "media_name": m_name, "media_size": m_size_hr}
 
