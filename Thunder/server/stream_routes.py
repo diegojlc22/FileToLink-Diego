@@ -209,13 +209,20 @@ async def media_delivery(request: web.Request):
         message_id, secure_hash = parse_media_request(path, request.query)
 
         client_id, streamer = select_optimal_client()
+        file_info = await streamer.get_file_info(message_id)
+
+        # Se o bot secundário falhar ou não encontrar o arquivo, tenta com o bot principal (Fallback)
+        if client_id != 0 and (not file_info.get('unique_id') or 'error' in file_info):
+            logger.warning(f"Bot secundário {client_id} falhou para o arquivo {message_id}, usando bot principal.")
+            client_id = 0
+            streamer = get_streamer(0)
+            file_info = await streamer.get_file_info(message_id)
 
         work_loads[client_id] += 1
 
         try:
-            file_info = await streamer.get_file_info(message_id)
             if not file_info.get('unique_id'):
-                raise FileNotFound("File unique ID not found in info.")
+                raise FileNotFound("O arquivo não foi encontrado por nenhum dos bots.")
 
             # A verificação de hash é desativada para suportar Multi-Client, 
             # já que cada bot vê um file_unique_id diferente no Telegram.

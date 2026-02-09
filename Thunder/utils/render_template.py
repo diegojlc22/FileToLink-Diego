@@ -35,8 +35,9 @@ async def render_page(id: int, secure_hash: str, requested_action: str | None = 
         file_unique_id = get_uniqid(message)
         file_name = get_fname(message)
         
-        if not file_unique_id or file_unique_id[:6] != secure_hash:
-            raise InvalidHash("File unique ID or secure hash mismatch during rendering.")
+        # Verificação de hash desativada para suportar Multi-Token (cada bot vê um hash diferente)
+        # if not file_unique_id or file_unique_id[:6] != secure_hash:
+        #     raise InvalidHash("File unique ID or secure hash mismatch during rendering.")
         
         quoted_filename = urllib.parse.quote(file_name.replace('/', '_'))
         src = urllib.parse.urljoin(Var.URL, f'{secure_hash}{id}/{quoted_filename}')
