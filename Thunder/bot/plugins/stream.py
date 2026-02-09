@@ -248,7 +248,7 @@ async def link_handler(bot: Client, msg: Message, **kwargs):
         else:
             await process_batch(client, message, message.reply_to_message.id, num_files, status_msg, False, notification_msg=notification_msg)
 
-    await handle_rate_limited_request(bot, msg, _actual_link_handler, **kwargs)
+    await _actual_link_handler(bot, msg, **kwargs)
 
 
 @StreamBot.on_message(
@@ -268,7 +268,8 @@ async def private_receive_handler(bot: Client, msg: Message, **kwargs):
 
         notification_msg = handler_kwargs.get('notification_msg')
 
-        await log_newusr(client, message.from_user.id, message.from_user.first_name or "")
+        # Notification removed for cleaner performance
+        # await log_newusr(client, message.from_user.id, message.from_user.first_name or "")
         try:
             status_msg = await message.reply_text(MSG_PROCESSING_FILE, quote=True)
         except FloodWait as e:
@@ -276,7 +277,7 @@ async def private_receive_handler(bot: Client, msg: Message, **kwargs):
             status_msg = await message.reply_text(MSG_PROCESSING_FILE, quote=True)
         await process_single(client, message, message, status_msg, False, notification_msg=notification_msg)
 
-    await handle_rate_limited_request(bot, msg, _actual_private_receive_handler, **kwargs)
+    await _actual_private_receive_handler(bot, msg, **kwargs)
 
 
 @StreamBot.on_message(
@@ -375,7 +376,7 @@ async def channel_receive_handler(bot: Client, msg: Message):
         await _actual_channel_receive_handler(bot, msg)
         return
 
-    await handle_rate_limited_request(bot, msg, _actual_channel_receive_handler, rl_user_id=rl_user_id)
+    await _actual_channel_receive_handler(bot, msg)
 
 
 async def process_single(

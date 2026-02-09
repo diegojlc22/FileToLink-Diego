@@ -181,7 +181,7 @@ async def start_services():
         app_runner = web.AppRunner(await web_server())
         await app_runner.setup()
         bind_address = Var.BIND_ADDRESS
-        site = web.TCPSite(app_runner, bind_address, Var.PORT)
+        site = web.TCPSite(app_runner, bind_address, Var.PORT, access_log=None)
         await site.start()
 
         keepalive_task = asyncio.create_task(
