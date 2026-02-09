@@ -90,17 +90,39 @@ async def initialize_clients():
         print("╠═══════════════════════════════════════════════════════════╣")
         print("   ▶ No additional clients available at the moment.")
 
-    # Task de background para tentar religar bots que falharam (útil para FloodWait)
-    failed_tokens = {i: token for i, token in all_tokens.items() if i not in multi_clients}
-    if failed_tokens:
-        async def retry_failed_clients():
-            await asyncio.sleep(60) # Espera 1 minuto antes de tentar a primeira vez
-            for cid, token in failed_tokens.copy().items():
-                if cid not in multi_clients:
-                    res = await start_client(cid, token)
-                    if res:
-                        multi_clients[res[0]] = res[1]
-                        del failed_tokens[cid]
-                        logger.info(f"✅ Cliente {cid} recuperado e ativo!")
+    # Task de background permanente para manutenção dos clientes
+    all_tokens_dict = all_tokens
+    
+    async def maintenance_loop():
+        while True:
+            try:
+                await asyncio.sleep(60) # Verifica a cada 1 minuto
+                
+                # 1. Tenta reconectar bots que falharam na inicialização ou caíram
+                for cid, token in all_tokens_dict.items():
+                    if cid not in multi_clients or not multi_clients[cid].is_connected:
+                        logger.info(f"🔄 Tentando (re)conectar Cliente {cid}...")
+                        res = await start_client(cid, token)
+                        if res:
+                            multi_clients[res[0]] = res[1]
+                            logger.info(f"✅ Cliente {cid} está online agora!")
+                
+                # 2. Health Check: Verifica se os bots ativos respondem (evita o "hang")
+                for cid, client in list(multi_clients.items()):
+                    if client.is_connected:
+                        try:
+                            # Tenta um comando simples com timeout curto
+                            await asyncio.wait_for(client.get_me(), timeout=5.0)
+                        except (asyncio.TimeoutError, Exception) as e:
+                            logger.warning(f"⚠️ Cliente {cid} não respondeu ao health check: {e}. Reiniciando...")
+                            try:
+                                await client.stop()
+                            except:
+                                pass
+                            # O loop de reconexão acima cuidará de ligá-lo na próxima volta
+                            if cid in multi_clients:
+                                del multi_clients[cid]
+            except Exception as e:
+                logger.error(f"❌ Erro no loop de manutenção de clientes: {e}", exc_info=True)
 
-        asyncio.create_task(retry_failed_clients())
+    asyncio.create_task(maintenance_loop(), name="client_maintenance_task")

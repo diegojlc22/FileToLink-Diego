@@ -232,29 +232,38 @@ async def media_delivery(request: web.Request):
         path = request.match_info["path"]
         message_id, secure_hash = parse_media_request(path, request.query)
         
-        # Define o streamer principal no início para evitar erros de UnboundLocalError
-        main_streamer = get_streamer(0)
+        # PRIORIDADE TOTAL AO BOT 0 (O único 100% estável para IDs)
+        # Os outros bots só entram se o 0 estiver em FloodWait real.
+        client_id, streamer = select_optimal_client()
 
         # Tenta buscar do cache primeiro (evita FloodWait do Telegram no F5)
         if message_id in FILE_INFO_CACHE:
             file_info = FILE_INFO_CACHE[message_id]
             logger.debug(f"ℹ Usando cache para o arquivo {message_id}")
         else:
+            file_info = None
+            # Tenta pegar metadados com o streamer selecionado primeiro 
+            # Se falhar, tenta outros bots disponíveis
             try:
-                file_info = await main_streamer.get_file_info(message_id)
-                if file_info and file_info.get('unique_id'):
-                    FILE_INFO_CACHE[message_id] = file_info
-                    logger.info(f"✅ Metadados salvos no cache para o arquivo {message_id}")
+                # Timeout de 10s para não travar a requisição
+                file_info = await asyncio.wait_for(streamer.get_file_info(message_id), timeout=10.0)
             except Exception as e:
-                logger.error(f"Erro crítico: Bot principal não conseguiu acessar arquivo {message_id}: {e}")
-                raise FileNotFound("Arquivo não encontrado no bot principal.")
+                logger.warning(f"⚠️ Bot {client_id} falhou ao pegar metadados: {e}. Tentando fallback...")
+                # Se o selecionado falhou, tentamos o bot 0 explicitamente ou qualquer outro
+                fallback_streamer = get_streamer(0)
+                try:
+                    file_info = await asyncio.wait_for(fallback_streamer.get_file_info(message_id), timeout=10.0)
+                except Exception as fe:
+                    logger.error(f"❌ Fallback de metadados falhou: {fe}")
+            
+            if file_info and file_info.get('unique_id'):
+                FILE_INFO_CACHE[message_id] = file_info
+                logger.info(f"✅ Metadados salvos no cache para o arquivo {message_id}")
+            else:
+                raise FileNotFound("Não foi possível obter os metadados do arquivo em nenhum bot.")
 
         if not file_info or not file_info.get('unique_id'):
             raise FileNotFound("ID único do arquivo não encontrado.")
-
-        # PRIORIDADE TOTAL AO BOT 0 (O único 100% estável para IDs)
-        # Os outros bots só entram se o 0 estiver em FloodWait real.
-        client_id, streamer = select_optimal_client()
 
         work_loads[client_id] += 1
         logger.info(f"▶ [Bot {client_id}] Conexão iniciada. Carga: {work_loads[client_id]}")

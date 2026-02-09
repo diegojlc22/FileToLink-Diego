@@ -22,7 +22,15 @@ class ByteStreamer:
 
     async def get_message(self, message_id: int) -> Message:
         try:
-            return await self.client.get_messages(self.chat_id, message_id)
+            # Adicionado timeout de 15s para evitar que o bot fique "travado" infinitamente 
+            # e force o fallback do servidor para outro bot.
+            return await asyncio.wait_for(
+                self.client.get_messages(self.chat_id, message_id), 
+                timeout=15.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"⏰ Timeout ao buscar mensagem {message_id} no bot {self.client.name}")
+            raise Exception(f"Timeout no bot {self.client.name}")
         except FloodWait as e:
             # Não dormimos aqui, deixamos a rota tratar e trocar de bot
             raise e
