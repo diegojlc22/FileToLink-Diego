@@ -42,13 +42,15 @@ CORS_HEADERS = {
     "Access-Control-Expose-Headers": "Content-Length, Content-Range, Content-Disposition",
 }
 
-streamers = {}
-
-
 def get_streamer(client_id: int) -> ByteStreamer:
-    if client_id not in streamers:
-        streamers[client_id] = ByteStreamer(multi_clients[client_id])
-    return streamers[client_id]
+    # Fix: Não cachear o streamer. O `clients.py` pode reiniciar o cliente e mudar o objeto na `multi_clients`.
+    # Se usarmos cache, ficamos presos com um cliente "morto" e o bot trava.
+    client = multi_clients.get(client_id)
+    if not client:
+        # Fallback de segurança
+        logger.warning(f"Client {client_id} not found in multi_clients during get_streamer. Using primary.")
+        client = multi_clients.get(0)
+    return ByteStreamer(client)
 
 
 def parse_media_request(path: str, query: dict) -> tuple[int, str]:
