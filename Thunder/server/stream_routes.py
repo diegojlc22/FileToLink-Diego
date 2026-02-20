@@ -100,16 +100,13 @@ def select_optimal_client() -> tuple[int, ByteStreamer]:
         available_indices.append(cid)
 
     if not available_indices:
-        # Se TUDO estiver banido, tenta o Bot 0 como última esperança
-        logger.warning("ALERTA: Todos os bots estão banidos! Tentando Bot 0.")
+        # Se TUDO estiver banido (raro), tenta o Bot 0 como última esperança
+        logger.warning("ALERTA: Todos os bots secundários estão banidos ou offline! Tentando Bot principal.")
         return 0, get_streamer(0)
 
-    # Sempre prefere o Bot 0 se ele estiver disponível
-    if 0 in available_indices:
-        return 0, get_streamer(0)
-
-    # Se Bot 0 está banido, usa o secundário com menos carga
-    client_id = min(available_indices, key=lambda x: work_loads[x])
+    # RODÍZIO REAL: Escolhe o bot que tiver a MENOR carga no momento entre os disponíveis.
+    # Isso evita que o Bot 0 fique sobrecarregado enquanto os outros ficam ociosos.
+    client_id = min(available_indices, key=lambda x: work_loads.get(x, 0))
     return client_id, get_streamer(client_id)
 
 
