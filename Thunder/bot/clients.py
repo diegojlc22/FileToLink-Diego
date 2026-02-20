@@ -1,6 +1,7 @@
 # Thunder/bot/clients.py
 
 import asyncio
+import os
 
 from pyrogram import Client
 from pyrogram.errors import FloodWait
@@ -34,50 +35,51 @@ async def initialize_clients():
         print("   ▶ Primary client will be used.")
         return
 
-    async def start_client(client_id, token):
+    async def start_client(client_id, token_or_session):
         try:
-            if client_id == len(all_tokens):
-                await asyncio.sleep(2)
+            is_bot = ":" in token_or_session
             client = Client(
                 api_hash=Var.API_HASH,
                 api_id=Var.API_ID,
-                bot_token=token,
+                bot_token=token_or_session if is_bot else None,
+                session_string=None if is_bot else token_or_session,
                 in_memory=True,
-                name=str(client_id),
+                name=f"Client_{client_id}",
                 no_updates=True,
                 max_concurrent_transmissions=1000,
                 sleep_threshold=Var.SLEEP_THRESHOLD
             )
-            try:
-                # Tenta iniciar o bot com um tempo limite de 15 segundos
-                await asyncio.wait_for(client.start(), timeout=15.0)
-            except asyncio.TimeoutError:
-                logger.error(f"   ✖ Tempo esgotado ao ligar o Cliente {client_id}. Ignorando.")
-                return None
-            except FloodWait as e:
-                logger.warning(f"   ◎ Cliente {client_id} em FloodWait ({e.value}s).")
-                return None
-
-            # Pequeno teste/aquecimento: força o bot a conhecer o canal após ligar
+            await asyncio.wait_for(client.start(), timeout=20.0)
+            
             try:
                 chat = await client.get_chat(Var.BIN_CHANNEL)
-                logger.info(f"   ✓ Cliente {client_id} conectado ao canal: {chat.title}")
+                logger.info(f"   ✓ Cliente {client_id} online: {chat.title}")
             except Exception as e:
-                logger.error(f"   ✖ Cliente {client_id} NÃO TEM ACESSO ao canal {Var.BIN_CHANNEL}! Erro: {e}")
-                # Se for o bot principal, isso é fatal. Se for secundário, apenas ignoramos ele.
-                if client_id == 0:
-                    raise e
+                logger.error(f"   ✖ Cliente {client_id} sem acesso ao canal: {e}")
+                if client_id == 0: raise e
                 return None
             
             work_loads[client_id] = 0
             return client_id, client
         except Exception as e:
-            logger.error(f"   ✖ Failed to start Client ID {client_id}. Error: {e}", exc_info=True)
+            logger.error(f"   ✖ Falha ao iniciar Cliente {client_id}: {e}")
             return None
 
-    clients_results = await asyncio.gather(*[start_client(i, token) for i, token in all_tokens.items() if token])
+    # Carrega tokens extras e sessions do ambiente
+    config_tokens = TokenParser().parse_from_env()
+    # Adiciona STRING_SESSION se existir
+    session = os.getenv("STRING_SESSION")
+    if session:
+        config_tokens[99] = session # ID 99 reservado para a session principal
+
+    if not config_tokens:
+        print("   ◎ Nenhum cliente adicional encontrado.")
+        return
+
+    tasks = [start_client(cid, tok) for cid, tok in config_tokens.items()]
+    results = await asyncio.gather(*tasks)
     
-    for res in clients_results:
+    for res in results:
         if res:
             cid, client = res
             multi_clients[cid] = client
@@ -99,7 +101,7 @@ async def initialize_clients():
                 await asyncio.sleep(60) # Verifica a cada 1 minuto
                 
                 # 1. Tenta reconectar bots que falharam na inicialização ou caíram
-                for cid, token in all_tokens_dict.items():
+                for cid, token in config_tokens.items():
                     if cid not in multi_clients or not multi_clients[cid].is_connected:
                         logger.info(f"🔄 Tentando (re)conectar Cliente {cid}...")
                         res = await start_client(cid, token)
@@ -107,19 +109,17 @@ async def initialize_clients():
                             multi_clients[res[0]] = res[1]
                             logger.info(f"✅ Cliente {cid} está online agora!")
                 
-                # 2. Health Check: Verifica se os bots ativos respondem (evita o "hang")
+                # 2. Health Check: Verifica se os bots ativos respondem
                 for cid, client in list(multi_clients.items()):
                     if client.is_connected:
                         try:
-                            # Tenta um comando simples com timeout curto
                             await asyncio.wait_for(client.get_me(), timeout=5.0)
-                        except (asyncio.TimeoutError, Exception) as e:
-                            logger.warning(f"⚠️ Cliente {cid} não respondeu ao health check: {e}. Reiniciando...")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Cliente {cid} não respondeu: {e}. Reiniciando...")
                             try:
                                 await client.stop()
                             except:
                                 pass
-                            # O loop de reconexão acima cuidará de ligá-lo na próxima volta
                             if cid in multi_clients:
                                 del multi_clients[cid]
             except Exception as e:

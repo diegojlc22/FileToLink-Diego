@@ -236,6 +236,66 @@ async def media_preview(request: web.Request):
         logger.error(f"Preview error {error_id}: {e}", exc_info=True)
         raise web.HTTPInternalServerError(
             text=f"Server error occurred: {error_id}") from e
+# Cache global de metadados para evitar FloodWait do Telegram no F5
+FILE_INFO_CACHE = {}
+# Futuros para evitar que múltiplas requests busquem o mesmo metadado ao mesmo tempo
+METADATA_FETCHERS = {}
+
+# ... (parse_media_request e select_optimal_client permanecem iguais)
+
+async def fetch_file_info(message_id: int, streamer: ByteStreamer):
+    """Busca informações do arquivo de forma segura e compartilhada."""
+    if message_id in FILE_INFO_CACHE:
+        return FILE_INFO_CACHE[message_id]
+    
+    # Se já tem alguém buscando, espera o resultado
+    if message_id in METADATA_FETCHERS:
+        fetcher = METADATA_FETCHERS[message_id]
+        if isinstance(fetcher, asyncio.Future):
+            return await fetcher
+        return fetcher # Já é o resultado se não for Future
+    
+    # Cria uma "promessa"
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+    METADATA_FETCHERS[message_id] = future
+    
+    try:
+        file_info = None
+        # Prioridade absoluta para o Bot 0 nos metadados
+        primary_streamer = get_streamer(0)
+        try:
+            file_info = await asyncio.wait_for(primary_streamer.get_file_info(message_id), timeout=12.0)
+        except Exception:
+            # Fallback para o bot atual se o 0 falhar
+            try:
+                file_info = await asyncio.wait_for(streamer.get_file_info(message_id), timeout=10.0)
+            except Exception as fe:
+                logger.error(f"❌ Falha total metadados ID {message_id}: {fe}")
+        
+        if file_info and file_info.get('unique_id'):
+            FILE_INFO_CACHE[message_id] = file_info
+            if not future.done():
+                future.set_result(file_info)
+            return file_info
+        else:
+            err = FileNotFound("Metadados não encontrados.")
+            if not future.done():
+                future.set_exception(err)
+            raise err
+            
+    except Exception as e:
+        if not future.done():
+            future.set_exception(e)
+        raise
+    finally:
+        # Remove do dicionário de fetchers após um tempo para permitir re-tentativas se falhou
+        # mas mantém no cache se deu certo.
+        async def delayed_cleanup():
+            await asyncio.sleep(5)
+            METADATA_FETCHERS.pop(message_id, None)
+        
+        asyncio.create_task(delayed_cleanup())
 
 
 @routes.get(r"/{path:.+}", allow_head=True)
@@ -247,29 +307,12 @@ async def media_delivery(request: web.Request):
         # Seleciona o melhor bot levando em conta a carga e se o bot enxerga o arquivo
         client_id, streamer = select_optimal_client(message_id)
 
-        # Tenta buscar do cache primeiro (evita FloodWait do Telegram no F5)
-        if message_id in FILE_INFO_CACHE:
-            file_info = FILE_INFO_CACHE[message_id]
-            logger.debug(f"ℹ Usando cache para o arquivo {message_id}")
-        else:
-            file_info = None
-            # Prioridade absoluta para o Bot 0 nos metadados, pois ele nunca falha em ver o que ele mesmo postou.
-            primary_streamer = get_streamer(0)
-            try:
-                file_info = await asyncio.wait_for(primary_streamer.get_file_info(message_id), timeout=10.0)
-            except Exception as e:
-                logger.warning(f"⚠️ Bot 0 falhou nos metadados: {e}. Tentando qualquer outro disponível...")
-                # Se o 0 falhou (raro), tentamos o streamer atual que foi selecionado pelo rodízio
-                try:
-                    file_info = await asyncio.wait_for(streamer.get_file_info(message_id), timeout=10.0)
-                except Exception as fe:
-                    logger.error(f"❌ Falha total ao obter metadados do arquivo {message_id}: {fe}")
-            
-            if file_info and file_info.get('unique_id'):
-                FILE_INFO_CACHE[message_id] = file_info
-                logger.info(f"✅ Metadados salvos no cache para o arquivo {message_id}")
-            else:
-                raise FileNotFound("Não foi possível obter os metadados do arquivo em nenhum bot.")
+        # Busca metadados de forma inteligente (evita o "choque" de 30 users ao mesmo tempo)
+        try:
+            file_info = await fetch_file_info(message_id, streamer)
+        except Exception as e:
+            logger.error(f"⚠️ Erro ao obter info do arquivo {message_id}: {e}")
+            raise FileNotFound(f"ID {message_id} indisponível no momento.")
 
         if not file_info or not file_info.get('unique_id'):
             raise FileNotFound("ID único do arquivo não encontrado.")
