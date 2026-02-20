@@ -30,7 +30,8 @@ FILE_INFO_CACHE = {}
 # Controle de bots que estão dando erro (ex: Message Not Found)
 BLACKLISTED_CLIENTS = {} # {client_id: expiration_timestamp}
 # Bots que estão "cegos" para IDs específicos (delay de propagação do Telegram)
-BLIND_CLIENTS_CACHE = {} # {message_id: [ids_dos_bots_cegos]}
+# Formato: {message_id: {client_id: expiration_timestamp}}
+BLIND_CLIENTS_CACHE = {} 
 
 PATTERN_HASH_FIRST = re.compile(
     rf"^([a-zA-Z0-9_-]{{{SECURE_HASH_LENGTH}}})(\d+)(?:/.*)?$")
@@ -91,28 +92,30 @@ def select_optimal_client(message_id: int = None) -> tuple[int, ByteStreamer]:
 
     current_time = time.time()
     
-    # Lista de bots que sabemos que não conseguem ver este arquivo específico
-    blind_for_this_id = BLIND_CLIENTS_CACHE.get(message_id, [])
+    # Dicionário de cegueira para este arquivo
+    blind_db = BLIND_CLIENTS_CACHE.get(message_id, {})
 
     # Lista de todos os bots que não estão banidos e enxergam o arquivo
     available_indices = []
     for cid in sorted(work_loads.keys()):
-        if cid in BLACKLISTED_CLIENTS:
-            if current_time < BLACKLISTED_CLIENTS[cid]:
-                continue
-            else:
-                BLACKLISTED_CLIENTS.pop(cid, None)
+        # Pula se o bot estiver banido (FloodWait ou Erro Grave)
+        if cid in BLACKLISTED_CLIENTS and current_time < BLACKLISTED_CLIENTS[cid]:
+            continue
         
-        if message_id and cid in blind_for_this_id:
+        # Pula se este bot estiver marcado como "cego" para este arquivo e ainda não expirou
+        if message_id and cid in blind_db and current_time < blind_db[cid]:
             continue
             
         available_indices.append(cid)
 
     if not available_indices:
-        # Se TUDO estiver banido ou cego, o Bot 0 é a única salvação
-        if message_id and 0 in blind_for_this_id:
-             # Se até o Bot 0 for cego (teoricamente impossível para o dono da msg), tentamos ele mesmo assim
-             return 0, get_streamer(0)
+        # Se TUDO estiver banido ou cego, tentamos o que tiver menor carga (mesmo cego) 
+        # para não travar totalmente e dar chance do propagation ter finalizado.
+        candidates = sorted(work_loads.keys(), key=lambda x: work_loads.get(x, 0))
+        for cid in candidates:
+            if cid in BLACKLISTED_CLIENTS and current_time < BLACKLISTED_CLIENTS[cid]:
+                continue
+            return cid, get_streamer(cid)
         return 0, get_streamer(0)
 
     # RODÍZIO REAL: Escolhe o bot que tiver a MENOR carga no momento entre os disponíveis.
@@ -348,36 +351,41 @@ async def media_delivery(request: web.Request):
                             if bytes_sent >= content_length:
                                 break
                     except (FloodWait, Exception) as e:
-                        # Se o erro for que o bot "não viu" a mídia, damos uma segunda chance
+                        # Se o erro for que o bot "não viu" a mídia, damos uma chance com delay
                         if "doesn't contain any downloadable media" in str(e):
-                            # Marca o bot como "cego" para este arquivo para não travar o play
-                            if message_id not in BLIND_CLIENTS_CACHE:
-                                BLIND_CLIENTS_CACHE[message_id] = []
-                            if client_id not in BLIND_CLIENTS_CACHE[message_id]:
-                                BLIND_CLIENTS_CACHE[message_id].append(client_id)
-                                
-                            logger.warning(f"🔄 Bot {client_id} marcado como CEGO para ID {message_id}. Forçando atualização...")
+                            logger.warning(f"🔄 Bot {client_id} não viu ID {message_id}. Esperando 2s para propagação...")
+                            await asyncio.sleep(2.0)
                             try:
-                                await streamer.get_message(message_id) # Tenta forçar o Telegram a mostrar
+                                # Força o bot a buscar a mensagem novamente (tentativa 2)
+                                await streamer.get_message(message_id)
                                 async for chunk in streamer.stream_file(message_id, offset=start + bytes_sent, limit=content_length - bytes_sent):
                                     yield chunk
                                     bytes_sent += len(chunk)
-                                return # Sucesso na segunda chance
+                                return 
                             except Exception as e2:
-                                e = e2 # Falhou de novo, segue para banimento/fallback
+                                # Se falhou de novo, marca como cego temporário (30s) para não sobrecarregar Bot 0
+                                if message_id not in BLIND_CLIENTS_CACHE:
+                                    BLIND_CLIENTS_CACHE[message_id] = {}
+                                BLIND_CLIENTS_CACHE[message_id][client_id] = time.time() + 30
+                                e = e2
 
-                        # Se falhou feio ou continua cego, banimos por um tempo curto 
-                        wait_time = getattr(e, 'value', 60) # 60s se for erro vago
-                        logger.error(f"❌ Bot {client_id} falhou: {e}. Banindo por {wait_time}s.")
+                        # Se falhou feio (Flood ou cego real), banimos por um tempo curto 
+                        # IMPORTANTE: Não banimos Bot 0 por timeout, ele pode estar apenas sob carga alta.
+                        if client_id == 0 and "Timeout" in str(e):
+                            wait_time = 5 # Só 5 segundos para o 0 esfriar, sem ban real
+                        else:
+                            wait_time = getattr(e, 'value', 60)
+                            
+                        logger.error(f"❌ Bot {client_id} falhou: {e}. 'Esfriando' por {wait_time}s.")
                         BLACKLISTED_CLIENTS[client_id] = time.time() + wait_time
                         
-                        # Tenta encontrar o próximo bot disponível (Fallback ignorando este cego)
+                        # Tenta encontrar o próximo bot disponível (Fallback ignorando este cego/ban)
                         try:
                             next_id, next_streamer = select_optimal_client(message_id)
                             if next_id == client_id:
-                                raise e # Sem saída 
+                                raise e 
                                 
-                            logger.warning(f"🔄 Fallback Imadiato: Trocando para Bot {next_id}...")
+                            logger.warning(f"🔄 Fallback: Trocando do Bot {client_id} para Bot {next_id}...")
                             async for chunk in next_streamer.stream_file(
                                     message_id, offset=start + bytes_sent, limit=content_length - bytes_sent):
                                 yield chunk
