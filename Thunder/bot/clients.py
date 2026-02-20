@@ -83,6 +83,8 @@ async def initialize_clients():
         if res:
             cid, client = res
             multi_clients[cid] = client
+            if cid == 99:
+                logger.info("   💎 [MASTER] Conta de Usuário (Session) vinculada como Cliente 99!")
 
     if len(multi_clients) > 1:
         Var.MULTI_CLIENT = True
@@ -93,8 +95,6 @@ async def initialize_clients():
         print("   ▶ No additional clients available at the moment.")
 
     # Task de background permanente para manutenção dos clientes
-    all_tokens_dict = all_tokens
-    
     async def maintenance_loop():
         while True:
             try:

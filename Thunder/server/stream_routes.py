@@ -118,6 +118,13 @@ def select_optimal_client(message_id: int = None) -> tuple[int, ByteStreamer]:
             return cid, get_streamer(cid)
         return 0, get_streamer(0)
 
+    # PRIORIDADE: Conta de Usuário (Session ID 99) é infinitamente mais estável.
+    if 99 in available_indices:
+        # Se for o Master, ele aguenta muito mais carga.
+        # Só passamos para os bots comuns se o Master estiver realmente sobrecarregado (ex: > 400 conexões)
+        if work_loads.get(99, 0) < 400:
+            return 99, get_streamer(99)
+
     # RODÍZIO REAL: Escolhe o bot que tiver a MENOR carga no momento entre os disponíveis.
     client_id = min(available_indices, key=lambda x: work_loads.get(x, 0))
     return client_id, get_streamer(client_id)
@@ -262,14 +269,26 @@ async def fetch_file_info(message_id: int, streamer: ByteStreamer):
     
     try:
         file_info = None
-        # Prioridade absoluta para o Bot 0 nos metadados
-        primary_streamer = get_streamer(0)
-        try:
-            file_info = await asyncio.wait_for(primary_streamer.get_file_info(message_id), timeout=12.0)
-        except Exception:
-            # Fallback para o bot atual se o 0 falhar
+        # Prioridade 1: Conta MASTER (99) - Vê tudo instantaneamente
+        # Prioridade 2: Bot Principal (0)
+        source_ids = [99, 0]
+        
+        for sid in source_ids:
+            if sid in multi_clients:
+                try:
+                    s_name = "MASTER" if sid == 99 else "BOT 0"
+                    logger.debug(f"🔍 Buscando metadados via {s_name} (ID {sid})...")
+                    st = get_streamer(sid)
+                    file_info = await asyncio.wait_for(st.get_file_info(message_id), timeout=10.0)
+                    if file_info and file_info.get('unique_id'):
+                        break
+                except Exception:
+                    continue
+        
+        # Último recurso: tenta no bot que a request veio (se não for nenhum dos acima)
+        if not file_info:
             try:
-                file_info = await asyncio.wait_for(streamer.get_file_info(message_id), timeout=10.0)
+                file_info = await asyncio.wait_for(streamer.get_file_info(message_id), timeout=8.0)
             except Exception as fe:
                 logger.error(f"❌ Falha total metadados ID {message_id}: {fe}")
         
