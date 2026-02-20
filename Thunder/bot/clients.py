@@ -65,12 +65,15 @@ async def initialize_clients():
             logger.error(f"   ✖ Falha ao iniciar Cliente {client_id}: {e}")
             return None
 
-    # Carrega tokens extras e sessions do ambiente
+    # Carrega tokens extras do ambiente
     config_tokens = TokenParser().parse_from_env()
-    # Adiciona STRING_SESSION se existir
-    session = os.getenv("STRING_SESSION")
-    if session:
-        config_tokens[99] = session # ID 99 reservado para a session principal
+    
+    # Adiciona STRING_SESSION da classe Var (ID 99 reservado)
+    if Var.STRING_SESSION:
+        config_tokens[99] = Var.STRING_SESSION
+        logger.info("   🔍 STRING_SESSION detectada! Preparando Cliente 99...")
+    else:
+        logger.warning("   ⚠️ STRING_SESSION não encontrada no arquivo config.env.")
 
     if not config_tokens:
         print("   ◎ Nenhum cliente adicional encontrado.")

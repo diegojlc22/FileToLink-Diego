@@ -448,10 +448,15 @@ async def media_delivery(request: web.Request):
                                 if next_id == current_cid:
                                     # Se o bot selecionado for o mesmo, significa que não há outros 
                                     # disponíveis ou o Bot 0 é a única opção restante.
-                                    if is_no_media and current_cid != 0:
-                                        # Forçamos o Bot 0 como última esperança se não for ele quem falhou
-                                        next_id = 0
-                                        next_streamer = get_streamer(0)
+                                    if is_no_media:
+                                        # Se o bot deu "No Media", tentamos a conta MASTER (99) ou o Bot 0
+                                        # que costumam enxergar o arquivo mais rápido.
+                                        last_hope_cid = 99 if 99 in multi_clients and current_cid != 99 else 0
+                                        if current_cid != last_hope_cid:
+                                            next_id = last_hope_cid
+                                            next_streamer = get_streamer(last_hope_cid)
+                                        else:
+                                            raise e
                                     else:
                                         # Se já é o Bot 0 ou não tem mais nada, raise o erro original
                                         raise e
