@@ -17,6 +17,7 @@ class Database:
         self.token_col: AsyncCollection = self.db.tokens
         self.authorized_users_col: AsyncCollection = self.db.authorized_users
         self.restart_message_col: AsyncCollection = self.db.restart_message
+        self.series_col: AsyncCollection = self.db.series_sessions
 
     async def ensure_indexes(self):
         try:
@@ -29,6 +30,8 @@ class Database:
             await self.token_col.create_index("activated")
             await self.restart_message_col.create_index("message_id", unique=True)
             await self.restart_message_col.create_index("timestamp", expireAfterSeconds=3600)
+            await self.series_col.create_index("user_id", unique=True)
+            await self.series_col.create_index("timestamp", expireAfterSeconds=86400) # Sessão expira em 24h
 
             logger.debug("Database indexes ensured.")
         except Exception as e:
@@ -244,6 +247,44 @@ class Database:
         except Exception as e:
             logger.error(f"Error in is_user_authorized for user {user_id}: {e}", exc_info=True)
             return False
+
+    async def start_series_session(self, user_id: int, series_name: str) -> None:
+        try:
+            await self.series_col.update_one(
+                {"user_id": user_id},
+                {"$set": {
+                    "name": series_name,
+                    "items": [],
+                    "timestamp": datetime.datetime.utcnow()
+                }},
+                upsert=True
+            )
+        except Exception as e:
+            logger.error(f"Error starting series session for {user_id}: {e}", exc_info=True)
+
+    async def add_to_series_session(self, user_id: int, message_id: int) -> bool:
+        try:
+            res = await self.series_col.update_one(
+                {"user_id": user_id},
+                {"$push": {"items": message_id}, "$set": {"timestamp": datetime.datetime.utcnow()}}
+            )
+            return res.modified_count > 0
+        except Exception as e:
+            logger.error(f"Error adding to series session for {user_id}: {e}", exc_info=True)
+            return False
+
+    async def get_series_session(self, user_id: int) -> Optional[Dict[str, Any]]:
+        try:
+            return await self.series_col.find_one({"user_id": user_id})
+        except Exception as e:
+            logger.error(f"Error getting series session for {user_id}: {e}", exc_info=True)
+            return None
+
+    async def delete_series_session(self, user_id: int) -> None:
+        try:
+            await self.series_col.delete_one({"user_id": user_id})
+        except Exception as e:
+            logger.error(f"Error deleting series session for {user_id}: {e}", exc_info=True)
 
     async def close(self):
         if self._client:

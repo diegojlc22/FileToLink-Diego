@@ -34,6 +34,26 @@ LINK_CHUNK_SIZE = 20
 BATCH_UPDATE_INTERVAL = 5
 MESSAGE_DELAY = 0.5
 
+def clean_media_name(name: str) -> str:
+    # Remove resoluções, codecs, etc.
+    # Ex: Serie.S01E01.1080p.WEB-DL.x264.mkv -> Serie S01E01
+    name = re.sub(r'[\.\[\]\(\)]', ' ', name) 
+    name = re.sub(r'\s+', ' ', name) 
+    # Remove termos comuns de pirataria/qualidade
+    junk_terms = [
+        r'\d{3,4}p', r'WEB-DL', r'x26[45]', r'HEVC', r'BluRay', r'HDRip', r'BRRip', r'H\.?26[45]', 
+        r'AAC', r'Dual', r'Audio', r'Multi', r'Sub', r'Legenda', r'Dublado', r'Rip', r'NF', r'DSNP', r'AMZN',
+        r'WEB', r'DL', r'XviD', r'AC3'
+    ]
+    for term in junk_terms:
+        name = re.sub(term, '', name, flags=re.IGNORECASE)
+    
+    # Remove extensões comuns se sobrarem
+    name = re.sub(r'\.(mkv|mp4|avi|mov|ts|m4v)$', '', name, flags=re.IGNORECASE)
+    return name.strip()
+
+import re
+
 
 async def fwd_media(m_msg: Message) -> Optional[Message]:
     try:
@@ -271,6 +291,13 @@ async def private_receive_handler(bot: Client, msg: Message, **kwargs):
         # Notification removed for cleaner performance
         # await log_newusr(client, message.from_user.id, message.from_user.first_name or "")
         try:
+            # Verifica se está no modo série
+            session = await db.get_series_session(message.from_user.id)
+            if session:
+                await db.add_to_series_session(message.from_user.id, message.id)
+                # Notifica discretamente ou apenas ignora para o usuário continuar enviando
+                return
+
             status_msg = await message.reply_text(MSG_PROCESSING_FILE, quote=True)
         except FloodWait as e:
             await asyncio.sleep(e.value)
@@ -597,3 +624,70 @@ async def process_batch(
         )
     if notification_msg:
         await safe_delete_message(notification_msg)
+
+
+@StreamBot.on_message(filters.command("serie") & filters.private)
+async def serie_mode_handler(client, message):
+    if not await validate_request_common(client, message):
+        return
+    args = message.text.split(None, 1)
+    if len(args) < 2:
+        await message.reply_text("❌ Por favor, informe o nome da série.\nExemplo: `/serie Vikings`", quote=True)
+        return
+    
+    series_name = args[1]
+    await db.start_series_session(message.from_user.id, series_name)
+    await message.reply_text(
+        f"📺 **Modo Série Ativado!**\n\nSérie: `{series_name}`\n\nAgora me envie os episódios um por um ou encaminhe-os de uma vez.\n\nQuando terminar, use `/done`.",
+        quote=True
+    )
+
+@StreamBot.on_message(filters.command("done") & filters.private)
+async def done_handler(client, message):
+    if not await validate_request_common(client, message):
+        return
+    user_id = message.from_user.id
+    session = await db.get_series_session(user_id)
+    if not session or not session.get('items'):
+        await message.reply_text("❌ Nenhuma série ativa ou nenhum episódio enviado.")
+        if session: await db.delete_series_session(user_id)
+        return
+
+    series_name = session['name']
+    msg_ids = session['items']
+    
+    status = await message.reply_text(f"📝 Processando `{len(msg_ids)}` episódios de **{series_name}**...")
+    
+    links_text = f"📺 **{series_name}**\n\n"
+    
+    for mid in msg_ids:
+        try:
+            m = await client.get_messages(message.chat.id, mid)
+            if m and m.media:
+                stored = await fwd_media(m)
+                if stored:
+                    links = await gen_links(stored, shortener=False)
+                    raw_name = links['media_name']
+                    
+                    # Tenta extrair S00E00 ou algo parecido para organizar
+                    ep_match = re.search(r'(S\d+E\d+|E\d+)', raw_name, re.IGNORECASE)
+                    if ep_match:
+                        ep_label = ep_match.group(0).upper()
+                    else:
+                        ep_label = clean_media_name(raw_name)
+                    
+                    line = f"🔹 **{ep_label}**: [Assistir]({links['stream_link']}) | [Baixar]({links['online_link']})\n"
+                    
+                    # Verifica se o texto vai ficar muito longo para o Telegram
+                    if len(links_text + line) > 4000:
+                        await message.reply_text(links_text, disable_web_page_preview=True)
+                        links_text = ""
+                    
+                    links_text += line
+        except Exception as e:
+            logger.error(f"Error in done_handler processing {mid}: {e}")
+
+    await status.delete()
+    if links_text.strip():
+        await message.reply_text(links_text, disable_web_page_preview=True)
+    await db.delete_series_session(user_id)
