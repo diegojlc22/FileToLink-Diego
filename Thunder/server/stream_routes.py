@@ -241,19 +241,17 @@ async def media_delivery(request: web.Request):
             logger.debug(f"ℹ Usando cache para o arquivo {message_id}")
         else:
             file_info = None
-            # Tenta pegar metadados com o streamer selecionado primeiro 
-            # Se falhar, tenta outros bots disponíveis
+            # Prioridade absoluta para o Bot 0 nos metadados, pois ele nunca falha em ver o que ele mesmo postou.
+            primary_streamer = get_streamer(0)
             try:
-                # Timeout de 10s para não travar a requisição
-                file_info = await asyncio.wait_for(streamer.get_file_info(message_id), timeout=10.0)
+                file_info = await asyncio.wait_for(primary_streamer.get_file_info(message_id), timeout=10.0)
             except Exception as e:
-                logger.warning(f"⚠️ Bot {client_id} falhou ao pegar metadados: {e}. Tentando fallback...")
-                # Se o selecionado falhou, tentamos o bot 0 explicitamente ou qualquer outro
-                fallback_streamer = get_streamer(0)
+                logger.warning(f"⚠️ Bot 0 falhou nos metadados: {e}. Tentando qualquer outro disponível...")
+                # Se o 0 falhou (raro), tentamos o streamer atual que foi selecionado pelo rodízio
                 try:
-                    file_info = await asyncio.wait_for(fallback_streamer.get_file_info(message_id), timeout=10.0)
+                    file_info = await asyncio.wait_for(streamer.get_file_info(message_id), timeout=10.0)
                 except Exception as fe:
-                    logger.error(f"❌ Fallback de metadados falhou: {fe}")
+                    logger.error(f"❌ Falha total ao obter metadados do arquivo {message_id}: {fe}")
             
             if file_info and file_info.get('unique_id'):
                 FILE_INFO_CACHE[message_id] = file_info
