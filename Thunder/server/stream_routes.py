@@ -341,6 +341,18 @@ async def media_delivery(request: web.Request):
                             if bytes_sent >= content_length:
                                 break
                     except (FloodWait, Exception) as e:
+                        # Se o erro for que o bot "não viu" a mídia, damos uma segunda chance forçando o re-fetch
+                        if "doesn't contain any downloadable media" in str(e):
+                            logger.warning(f"🔄 Bot {client_id} não viu a mídia no ID {message_id}. Tentando forçar atualização antes do ban...")
+                            try:
+                                await streamer.get_message(message_id) # Força re-fetch
+                                async for chunk in streamer.stream_file(message_id, offset=start + bytes_sent, limit=content_length - bytes_sent):
+                                    yield chunk
+                                    bytes_sent += len(chunk)
+                                return # Sucesso na segunda tentativa
+                            except Exception as e2:
+                                e = e2 # Falhou de novo, segue para o banimento
+
                         # Se qualquer bot falhar (ID errado ou FloodWait), banimos e tentamos outro
                         wait_time = getattr(e, 'value', 300) # 5 min se for erro comum
                         logger.error(f"❌ Bot {client_id} falhou: {e}. Banindo por {wait_time}s.")
