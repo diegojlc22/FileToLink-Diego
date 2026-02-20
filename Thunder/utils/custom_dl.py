@@ -24,10 +24,15 @@ class ByteStreamer:
         try:
             # Adicionado timeout de 15s para evitar que o bot fique "travado" infinitamente 
             # e force o fallback do servidor para outro bot.
-            return await asyncio.wait_for(
+            msg = await asyncio.wait_for(
                 self.client.get_messages(self.chat_id, message_id), 
                 timeout=15.0
             )
+            if not msg or getattr(msg, 'empty', False):
+                # Se a mensagem vier vazia, pode ser delay de propagação do Telegram
+                raise FileNotFound(f"Message {message_id} doesn't contain any downloadable media")
+            
+            return msg
         except asyncio.TimeoutError:
             logger.warning(f"⏰ Timeout ao buscar mensagem {message_id} no bot {self.client.name}")
             raise Exception(f"Timeout no bot {self.client.name}")
@@ -35,6 +40,8 @@ class ByteStreamer:
             # Não dormimos aqui, deixamos a rota tratar e trocar de bot
             raise e
         except Exception as e:
+            if "doesn't contain any downloadable media" in str(e):
+                raise e
             logger.debug(f"Error fetching message {message_id}: {e}")
             raise FileNotFound(f"Message {message_id} not found")
 
@@ -42,6 +49,11 @@ class ByteStreamer:
         self, message_id: int, offset: int = 0, limit: int = 0
     ) -> AsyncGenerator[bytes, None]:
         message = await self.get_message(message_id)
+        
+        # Verifica se realmente tem mídia para evitar o ValueError do pyrogram
+        media = get_media(message)
+        if not media:
+            raise ValueError("This message doesn't contain any downloadable media")
 
         chunk_offset = offset // (1024 * 1024)
 

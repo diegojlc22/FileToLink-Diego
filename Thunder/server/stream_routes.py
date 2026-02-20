@@ -324,78 +324,95 @@ async def media_delivery(request: web.Request):
 
             async def stream_generator():
                 nonlocal client_id, streamer
-                initial_client_id = client_id
+                current_cid = client_id
+                current_streamer = streamer
+                
+                # Armazenamos o bot original para decrementar a carga no final
+                # Mas se trocarmos de bot, precisamos gerenciar isso com cuidado.
+                active_cids = [current_cid]
+                
                 try:
                     bytes_sent = 0
-                    bytes_to_skip = start % CHUNK_SIZE
+                    while bytes_sent < content_length:
+                        try:
+                            bytes_to_skip = (start + bytes_sent) % CHUNK_SIZE
+                            
+                            async for chunk in current_streamer.stream_file(
+                                    message_id, offset=start + bytes_sent, limit=content_length - bytes_sent):
+                                
+                                # Ajuste de skip para o primeiro chunk de cada nova conexão/bot
+                                if bytes_to_skip > 0:
+                                    if len(chunk) <= bytes_to_skip:
+                                        bytes_to_skip -= len(chunk)
+                                        continue
+                                    chunk = chunk[bytes_to_skip:]
+                                    bytes_to_skip = 0
 
-                    try:
-                        # Tenta iniciar o stream direto
-                        async for chunk in streamer.stream_file(
-                                message_id, offset=start, limit=content_length):
-                            if bytes_to_skip > 0:
-                                if len(chunk) <= bytes_to_skip:
-                                    bytes_to_skip -= len(chunk)
-                                    continue
-                                chunk = chunk[bytes_to_skip:]
-                                bytes_to_skip = 0
+                                remaining = content_length - bytes_sent
+                                if len(chunk) > remaining:
+                                    chunk = chunk[:remaining]
 
-                            remaining = content_length - bytes_sent
-                            if len(chunk) > remaining:
-                                chunk = chunk[:remaining]
-
-                            if chunk:
-                                yield chunk
-                                bytes_sent += len(chunk)
-
-                            if bytes_sent >= content_length:
-                                break
-                    except (FloodWait, Exception) as e:
-                        # Se o erro for que o bot "não viu" a mídia, damos uma chance com delay
-                        if "doesn't contain any downloadable media" in str(e):
-                            logger.warning(f"🔄 Bot {client_id} não viu ID {message_id}. Esperando 2s para propagação...")
-                            await asyncio.sleep(2.0)
-                            try:
-                                # Força o bot a buscar a mensagem novamente (tentativa 2)
-                                await streamer.get_message(message_id)
-                                async for chunk in streamer.stream_file(message_id, offset=start + bytes_sent, limit=content_length - bytes_sent):
+                                if chunk:
                                     yield chunk
                                     bytes_sent += len(chunk)
-                                return 
-                            except Exception as e2:
-                                # Se falhou de novo, marca como cego temporário (30s) para não sobrecarregar Bot 0
+
+                                if bytes_sent >= content_length:
+                                    break
+                            
+                            # Se saiu do loop e terminou, encerramos o while
+                            break
+
+                        except Exception as e:
+                            err_str = str(e)
+                            is_no_media = "doesn't contain any downloadable media" in err_str
+                            
+                            if is_no_media:
+                                logger.warning(f"🔄 Bot {current_cid} não viu ID {message_id}. Aguardando propagação...")
+                                await asyncio.sleep(3.5) # Espera um pouco mais
+                            
+                            # Marca o bot atual como "cego" ou "banido"
+                            if is_no_media:
                                 if message_id not in BLIND_CLIENTS_CACHE:
                                     BLIND_CLIENTS_CACHE[message_id] = {}
-                                BLIND_CLIENTS_CACHE[message_id][client_id] = time.time() + 30
-                                e = e2
-
-                        # Se falhou feio (Flood ou cego real), banimos por um tempo curto 
-                        # IMPORTANTE: Não banimos Bot 0 por timeout, ele pode estar apenas sob carga alta.
-                        if client_id == 0 and "Timeout" in str(e):
-                            wait_time = 5 # Só 5 segundos para o 0 esfriar, sem ban real
-                        else:
-                            wait_time = getattr(e, 'value', 60)
+                                BLIND_CLIENTS_CACHE[message_id][current_cid] = time.time() + 45
+                            else:
+                                wait_time = getattr(e, 'value', 60)
+                                logger.error(f"❌ Bot {current_cid} falhou: {e}. 'Esfriando' por {wait_time}s.")
+                                BLACKLISTED_CLIENTS[current_cid] = time.time() + wait_time
                             
-                        logger.error(f"❌ Bot {client_id} falhou: {e}. 'Esfriando' por {wait_time}s.")
-                        BLACKLISTED_CLIENTS[client_id] = time.time() + wait_time
-                        
-                        # Tenta encontrar o próximo bot disponível (Fallback ignorando este cego/ban)
-                        try:
-                            next_id, next_streamer = select_optimal_client(message_id)
-                            if next_id == client_id:
-                                raise e 
+                            # Tenta buscar um novo bot
+                            try:
+                                next_id, next_streamer = select_optimal_client(message_id)
+                                if next_id == current_cid:
+                                    # Se o bot selecionado for o mesmo, significa que não há outros 
+                                    # disponíveis ou o Bot 0 é a única opção restante.
+                                    if is_no_media and current_cid != 0:
+                                        # Forçamos o Bot 0 como última esperança se não for ele quem falhou
+                                        next_id = 0
+                                        next_streamer = get_streamer(0)
+                                    else:
+                                        # Se já é o Bot 0 ou não tem mais nada, raise o erro original
+                                        raise e
                                 
-                            logger.warning(f"🔄 Fallback: Trocando do Bot {client_id} para Bot {next_id}...")
-                            async for chunk in next_streamer.stream_file(
-                                    message_id, offset=start + bytes_sent, limit=content_length - bytes_sent):
-                                yield chunk
-                                bytes_sent += len(chunk)
-                        except Exception as fe:
-                            logger.error(f"🚨 Fallback final falhou: {fe}")
-                            raise fe
+                                logger.warning(f"🔄 Fallback: Trocando do Bot {current_cid} para Bot {next_id}...")
+                                
+                                # Gerencia carga: decrementa do antigo, incrementa no novo
+                                work_loads[next_id] += 1
+                                active_cids.append(next_id)
+                                
+                                current_cid = next_id
+                                current_streamer = next_streamer
+                                # O loop `while` recomeça a partir do `bytes_sent` atual com o novo bot
+                                
+                            except Exception as fe:
+                                logger.error(f"🚨 Sem bots disponíveis para fallback: {fe}")
+                                raise e # Levanta o erro original que causou a falha do bot anterior
+
                 finally:
-                    # Sempre desconta do bot que começou a tarefa original para manter a contagem certa
-                    work_loads[initial_client_id] -= 1
+                    # Decrementa a carga de todos os bots que foram usados nesta request
+                    for cid in active_cids:
+                        if cid in work_loads:
+                            work_loads[cid] -= 1
 
             return web.Response(
                 status=206 if range_header else 200,
