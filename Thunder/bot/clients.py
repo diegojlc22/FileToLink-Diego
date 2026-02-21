@@ -37,14 +37,16 @@ async def initialize_clients():
 
     async def start_client(client_id, token_or_session):
         try:
+            # Cria pasta de sessões se não existir
+            os.makedirs("sessions", exist_ok=True)
+            
             is_bot = ":" in token_or_session
             client = Client(
                 api_hash=Var.API_HASH,
                 api_id=Var.API_ID,
                 bot_token=token_or_session if is_bot else None,
                 session_string=None if is_bot else token_or_session,
-                in_memory=True,
-                name=f"Client_{client_id}",
+                name=f"sessions/client_{client_id}",
                 no_updates=True,
                 max_concurrent_transmissions=1000,
                 sleep_threshold=Var.SLEEP_THRESHOLD
@@ -114,18 +116,32 @@ async def initialize_clients():
                 
                 # 2. Health Check: Verifica se os bots ativos respondem
                 for cid, client in list(multi_clients.items()):
+                    if cid == 0: continue # Pula o principal, ele tem seu próprio ciclo
+                    
                     if client.is_connected:
                         try:
-                            await asyncio.wait_for(client.get_me(), timeout=5.0)
+                            # Tenta um comando simples para ver se o bot está vivo
+                            await asyncio.wait_for(client.get_me(), timeout=8.0)
                         except Exception as e:
-                            logger.warning(f"⚠️ Cliente {cid} não respondeu: {e}. Reiniciando...")
+                            logger.warning(f"⚠️ Cliente {cid} não respondeu ({type(e).__name__}). Reiniciando...")
                             try:
-                                await client.stop()
-                            except:
-                                pass
-                            if cid in multi_clients:
+                                # Remove primeiro para parar de receber requests
                                 del multi_clients[cid]
+                                # Tenta parar o objeto antigo, ignorando erros de "database closed"
+                                try:
+                                    await asyncio.wait_for(client.stop(), timeout=5.0)
+                                except Exception:
+                                    pass
+                            except Exception as stop_error:
+                                logger.debug(f"Erro ao limpar cliente {cid}: {stop_error}")
+                    else:
+                        # Se já está desconectado, remove da lista para o loop de reconexão agir
+                        if cid in multi_clients:
+                            del multi_clients[cid]
+
             except Exception as e:
-                logger.error(f"❌ Erro no loop de manutenção de clientes: {e}", exc_info=True)
+                logger.error(f"❌ Erro no loop de manutenção de clientes: {e}")
+            
+            await asyncio.sleep(60) # Verifica a cada 1 minuto
 
     asyncio.create_task(maintenance_loop(), name="client_maintenance_task")
